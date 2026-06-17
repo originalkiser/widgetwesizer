@@ -2,7 +2,13 @@ package com.widgetwesizer.app
 
 import android.appwidget.AppWidgetManager
 import android.content.Intent
+import android.graphics.Bitmap
+import android.graphics.PixelFormat
+import android.os.Build
 import android.os.Bundle
+import android.os.Handler
+import android.os.Looper
+import android.view.PixelCopy
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
@@ -14,6 +20,7 @@ import androidx.lifecycle.viewmodel.compose.viewModel
 import com.widgetwesizer.app.ui.navigation.NavGraph
 import com.widgetwesizer.app.ui.theme.WidgetWesizerTheme
 import com.widgetwesizer.app.ui.viewmodel.WidgetBoardViewModel
+import com.widgetwesizer.app.widget.BoardSnapshot
 import com.widgetwesizer.app.widget.WidgetManager
 
 class MainActivity : ComponentActivity() {
@@ -72,8 +79,30 @@ class MainActivity : ComponentActivity() {
         widgetManager.startListening()
     }
 
+    override fun onPause() {
+        super.onPause()
+        captureBoard()
+    }
+
     override fun onStop() {
         super.onStop()
         widgetManager.stopListening()
+    }
+
+    private fun captureBoard() {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) return
+        val decorView = window.decorView
+        val w = decorView.width
+        val h = decorView.height
+        if (w == 0 || h == 0) return
+
+        val bitmap = Bitmap.createBitmap(w, h, Bitmap.Config.ARGB_8888)
+        PixelCopy.request(window, bitmap, { result ->
+            if (result == PixelCopy.SUCCESS) {
+                BoardSnapshot.save(applicationContext, bitmap)
+                BoardSnapshot.pushToHomeScreenWidgets(applicationContext)
+            }
+            bitmap.recycle()
+        }, Handler(Looper.getMainLooper()))
     }
 }
