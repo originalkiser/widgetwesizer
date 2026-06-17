@@ -4,6 +4,7 @@ import android.app.Application
 import android.appwidget.AppWidgetManager
 import android.appwidget.AppWidgetProviderInfo
 import android.content.Context
+import android.appwidget.AppWidgetHost
 import android.content.pm.PackageManager
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.ViewModel
@@ -40,10 +41,26 @@ class WidgetBoardViewModel(
 
     private fun checkPermission(): Boolean {
         val app = getApplication<Application>()
-        return app.packageManager.checkPermission(
-            "android.permission.BIND_APPWIDGET",
-            app.packageName
-        ) == PackageManager.PERMISSION_GRANTED
+        // PackageManager.checkPermission only reflects pm-granted permissions.
+        // On Android 12+, grantbind sets permission at the AppWidgetService level,
+        // which bindAppWidgetIdIfAllowed checks internally. Test-bind to detect it.
+        val awm = AppWidgetManager.getInstance(app)
+        val providers = awm.installedProviders
+        if (providers.isEmpty()) {
+            return app.packageManager.checkPermission(
+                "android.permission.BIND_APPWIDGET", app.packageName
+            ) == PackageManager.PERMISSION_GRANTED
+        }
+        val tempHost = AppWidgetHost(app, 9998)
+        val id = tempHost.allocateAppWidgetId()
+        return try {
+            val bound = awm.bindAppWidgetIdIfAllowed(id, providers.first().provider)
+            tempHost.deleteAppWidgetId(id)
+            bound
+        } catch (e: Exception) {
+            tempHost.deleteAppWidgetId(id)
+            false
+        }
     }
 
     fun addWidget(entry: WidgetEntry) {
