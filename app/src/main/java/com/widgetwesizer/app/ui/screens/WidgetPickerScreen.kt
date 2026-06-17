@@ -1,11 +1,10 @@
 package com.widgetwesizer.app.ui.screens
 
 import android.appwidget.AppWidgetManager
-import android.appwidget.AppWidgetProviderInfo
 import android.content.ComponentName
-import android.content.pm.PackageManager
 import android.graphics.drawable.Drawable
 import android.os.Bundle
+import android.widget.ImageView
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
@@ -19,11 +18,11 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
-import android.widget.ImageView
-import kotlinx.coroutines.launch
 import com.widgetwesizer.app.data.model.WidgetEntry
+import com.widgetwesizer.app.data.model.WidgetProviderItem
 import com.widgetwesizer.app.ui.viewmodel.WidgetBoardViewModel
 import com.widgetwesizer.app.widget.WidgetManager
+import kotlinx.coroutines.launch
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -35,36 +34,33 @@ fun WidgetPickerScreen(
     val context = LocalContext.current
     val snackbarHostState = remember { SnackbarHostState() }
     val scope = rememberCoroutineScope()
-    var selectedForAction by remember { mutableStateOf<AppWidgetProviderInfo?>(null) }
+    var selectedForAction by remember { mutableStateOf<WidgetProviderItem?>(null) }
 
-    val allWidgets = remember {
-        viewModel.getAllAvailableWidgets(context)
-            .sortedWith(compareBy({ getAppLabel(context, it) }, { it.loadLabel(context.packageManager) }))
-    }
-
+    val allWidgets = remember { viewModel.getAllAvailableWidgets(context) }
     val grouped = remember(allWidgets) {
-        allWidgets.groupBy { getAppLabel(context, it) }.toSortedMap()
+        allWidgets.groupBy { it.appLabel }.toSortedMap(compareBy { it.lowercase() })
     }
 
     // Destination choice dialog
-    selectedForAction?.let { info ->
+    selectedForAction?.let { item ->
         AlertDialog(
             onDismissRequest = { selectedForAction = null },
-            title = { Text(info.loadLabel(context.packageManager)) },
+            title = { Text(item.label) },
             text = { Text("Add to the WidgetWesizer canvas, or pin directly to your home screen?") },
             confirmButton = {
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     TextButton(onClick = {
                         selectedForAction = null
-                        pinWidgetToHomeScreen(context, info) { msg ->
-                            scope.launch { snackbarHostState.showSnackbar(msg) }
-                        }
+                        pinWidgetToHomeScreen(context, item,
+                            onSuccess = { msg -> scope.launch { snackbarHostState.showSnackbar(msg) } },
+                            onError = { msg -> scope.launch { snackbarHostState.showSnackbar(msg) } }
+                        )
                     }) { Text("Home Screen") }
                     TextButton(onClick = {
                         selectedForAction = null
                         bindAndAddWidget(
                             context = context,
-                            info = info,
+                            item = item,
                             widgetManager = widgetManager,
                             viewModel = viewModel,
                             onSuccess = onNavigateBack,
@@ -92,26 +88,37 @@ fun WidgetPickerScreen(
             )
         }
     ) { padding ->
-        LazyColumn(
-            modifier = Modifier
-                .fillMaxSize()
-                .padding(padding)
-        ) {
-            grouped.forEach { (appName, widgets) ->
-                item {
-                    Text(
-                        text = appName,
-                        style = MaterialTheme.typography.labelMedium,
-                        color = MaterialTheme.colorScheme.primary,
-                        modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp)
-                    )
-                    HorizontalDivider()
-                }
-                items(widgets) { info ->
-                    WidgetPickerItem(
-                        info = info,
-                        onSelect = { selectedForAction = info }
-                    )
+        if (allWidgets.isEmpty()) {
+            Box(
+                modifier = Modifier.fillMaxSize().padding(padding),
+                contentAlignment = Alignment.Center
+            ) {
+                Text(
+                    "No widgets found. Make sure grantbind has been run.",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f)
+                )
+            }
+        } else {
+            LazyColumn(
+                modifier = Modifier.fillMaxSize().padding(padding)
+            ) {
+                grouped.forEach { (appName, items) ->
+                    item {
+                        Text(
+                            text = appName,
+                            style = MaterialTheme.typography.labelMedium,
+                            color = MaterialTheme.colorScheme.primary,
+                            modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp)
+                        )
+                        HorizontalDivider()
+                    }
+                    items(items) { widgetItem ->
+                        WidgetPickerItem(
+                            item = widgetItem,
+                            onSelect = { selectedForAction = widgetItem }
+                        )
+                    }
                 }
             }
         }
@@ -120,18 +127,22 @@ fun WidgetPickerScreen(
 
 @Composable
 private fun WidgetPickerItem(
-    info: AppWidgetProviderInfo,
+    item: WidgetProviderItem,
     onSelect: () -> Unit
 ) {
     val context = LocalContext.current
     val pm = context.packageManager
-    val icon: Drawable? = remember(info) {
-        try { info.loadIcon(context, context.resources.displayMetrics.densityDpi) }
-        catch (e: Exception) { null }
+    val densityDpi = context.resources.displayMetrics.densityDpi
+
+    val icon: Drawable? = remember(item.provider) {
+        try {
+            item.providerInfo?.loadIcon(context, densityDpi)
+                ?: pm.getApplicationIcon(item.provider.packageName)
+        } catch (e: Exception) { null }
     }
-    val label = info.loadLabel(pm)
-    val minW = info.minWidth
-    val minH = info.minHeight
+
+    val minWDp = (item.minWidthPx * 160f / densityDpi).toInt()
+    val minHDp = (item.minHeightPx * 160f / densityDpi).toInt()
 
     Row(
         modifier = Modifier
@@ -157,70 +168,64 @@ private fun WidgetPickerItem(
         Spacer(modifier = Modifier.width(16.dp))
 
         Column(modifier = Modifier.weight(1f)) {
+            Text(text = item.label, style = MaterialTheme.typography.bodyLarge)
             Text(
-                text = label,
-                style = MaterialTheme.typography.bodyLarge
-            )
-            Text(
-                text = info.provider.packageName,
+                text = item.provider.packageName,
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f)
             )
         }
 
-        Spacer(modifier = Modifier.width(8.dp))
-
-        Surface(
-            shape = MaterialTheme.shapes.small,
-            color = MaterialTheme.colorScheme.secondaryContainer
-        ) {
-            Text(
-                text = "Min: ${pxToDp(context, minW)} × ${pxToDp(context, minH)} dp",
-                style = MaterialTheme.typography.labelSmall,
-                modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
-            )
+        if (minWDp > 0 || minHDp > 0) {
+            Spacer(modifier = Modifier.width(8.dp))
+            Surface(
+                shape = MaterialTheme.shapes.small,
+                color = MaterialTheme.colorScheme.secondaryContainer
+            ) {
+                Text(
+                    text = "Min: $minWDp × $minHDp dp",
+                    style = MaterialTheme.typography.labelSmall,
+                    modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
+                )
+            }
         }
     }
 }
 
 private fun bindAndAddWidget(
     context: android.content.Context,
-    info: AppWidgetProviderInfo,
+    item: WidgetProviderItem,
     widgetManager: WidgetManager,
     viewModel: WidgetBoardViewModel,
     onSuccess: () -> Unit,
     onError: (String) -> Unit
 ) {
     val appWidgetId = widgetManager.allocateWidgetId()
-    val provider = ComponentName(info.provider.packageName, info.provider.className)
     val options = Bundle().apply {
-        putInt(AppWidgetManager.OPTION_APPWIDGET_MIN_WIDTH, info.minWidth)
-        putInt(AppWidgetManager.OPTION_APPWIDGET_MAX_WIDTH, info.minWidth)
-        putInt(AppWidgetManager.OPTION_APPWIDGET_MIN_HEIGHT, info.minHeight)
-        putInt(AppWidgetManager.OPTION_APPWIDGET_MAX_HEIGHT, info.minHeight)
+        putInt(AppWidgetManager.OPTION_APPWIDGET_MIN_WIDTH, item.minWidthPx.coerceAtLeast(1))
+        putInt(AppWidgetManager.OPTION_APPWIDGET_MAX_WIDTH, item.minWidthPx.coerceAtLeast(1))
+        putInt(AppWidgetManager.OPTION_APPWIDGET_MIN_HEIGHT, item.minHeightPx.coerceAtLeast(1))
+        putInt(AppWidgetManager.OPTION_APPWIDGET_MAX_HEIGHT, item.minHeightPx.coerceAtLeast(1))
     }
 
-    widgetManager.bindWidget(appWidgetId, provider, options) { bound ->
+    widgetManager.bindWidget(appWidgetId, item.provider, options) { bound ->
         if (!bound) {
             widgetManager.deleteWidget(appWidgetId)
             onError("Failed to bind widget")
             return@bindWidget
         }
-        widgetManager.launchConfigureActivity(appWidgetId, info) { configured ->
-            if (!configured) {
-                onError("Widget configuration cancelled")
-                return@launchConfigureActivity
-            }
+
+        val addToBoard: () -> Unit = {
             val densityDpi = context.resources.displayMetrics.densityDpi
-            val minWDp = (info.minWidth * 160f / densityDpi)
-            val minHDp = (info.minHeight * 160f / densityDpi)
+            val minWDp = (item.minWidthPx * 160f / densityDpi).coerceAtLeast(40f)
+            val minHDp = (item.minHeightPx * 160f / densityDpi).coerceAtLeast(40f)
             val entry = WidgetEntry(
                 appWidgetId = appWidgetId,
-                packageName = info.provider.packageName,
-                className = info.provider.className,
-                label = info.loadLabel(context.packageManager),
-                widthDp = minWDp.coerceAtLeast(40f),
-                heightDp = minHDp.coerceAtLeast(40f),
+                packageName = item.provider.packageName,
+                className = item.provider.className,
+                label = item.label,
+                widthDp = minWDp,
+                heightDp = minHDp,
                 offsetXDp = 16f,
                 offsetYDp = 16f,
                 minWidthDp = minWDp,
@@ -229,32 +234,37 @@ private fun bindAndAddWidget(
             viewModel.addWidget(entry)
             onSuccess()
         }
-    }
-}
 
-private fun getAppLabel(context: android.content.Context, info: AppWidgetProviderInfo): String {
-    return try {
-        val appInfo = context.packageManager.getApplicationInfo(info.provider.packageName, 0)
-        context.packageManager.getApplicationLabel(appInfo).toString()
-    } catch (e: PackageManager.NameNotFoundException) {
-        info.provider.packageName
+        val providerInfo = item.providerInfo
+        if (providerInfo?.configure != null) {
+            widgetManager.launchConfigureActivity(appWidgetId, providerInfo) { configured ->
+                if (!configured) {
+                    onError("Widget configuration cancelled")
+                    return@launchConfigureActivity
+                }
+                addToBoard()
+            }
+        } else {
+            addToBoard()
+        }
     }
-}
-
-private fun pxToDp(context: android.content.Context, px: Int): Int {
-    return (px * 160f / context.resources.displayMetrics.densityDpi).toInt()
 }
 
 private fun pinWidgetToHomeScreen(
     context: android.content.Context,
-    info: AppWidgetProviderInfo,
+    item: WidgetProviderItem,
+    onSuccess: (String) -> Unit,
     onError: (String) -> Unit
 ) {
     val awm = AppWidgetManager.getInstance(context)
     if (!awm.isRequestPinAppWidgetSupported()) {
-        onError("Your home screen launcher doesn't support pinning widgets")
+        onError("Pixel Launcher doesn't support widget pinning via this API")
         return
     }
-    val provider = ComponentName(info.provider.packageName, info.provider.className)
-    awm.requestPinAppWidget(provider, null, null)
+    val sent = awm.requestPinAppWidget(item.provider, null, null)
+    if (sent) {
+        onSuccess("Check your home screen to place the widget")
+    } else {
+        onError("Pin request rejected — try going to your home screen and adding the widget manually")
+    }
 }
