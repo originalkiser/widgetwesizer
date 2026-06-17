@@ -1,3 +1,5 @@
 <resources>
     <string name="app_name">WidgetWesizer</string>
+    <string name="widget_description">Open your WidgetWesizer board</string>
+    <string name="widget_tap_to_open">Tap to open board</string>
 </resources>

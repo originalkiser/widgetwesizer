@@ -1,7 +1,5 @@
 package com.widgetwesizer.app.ui.screens
 
-import android.appwidget.AppWidgetManager
-import android.content.ComponentName
 import android.graphics.drawable.Drawable
 import android.os.Bundle
 import android.widget.ImageView
@@ -46,28 +44,19 @@ fun WidgetPickerScreen(
         AlertDialog(
             onDismissRequest = { selectedForAction = null },
             title = { Text(item.label) },
-            text = { Text("Add to the WidgetWesizer canvas, or pin directly to your home screen?") },
+            text = { Text("Add this widget to your WidgetWesizer board?") },
             confirmButton = {
-                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    TextButton(onClick = {
-                        selectedForAction = null
-                        pinWidgetToHomeScreen(context, item,
-                            onSuccess = { msg -> scope.launch { snackbarHostState.showSnackbar(msg) } },
-                            onError = { msg -> scope.launch { snackbarHostState.showSnackbar(msg) } }
-                        )
-                    }) { Text("Home Screen") }
-                    TextButton(onClick = {
-                        selectedForAction = null
-                        bindAndAddWidget(
-                            context = context,
-                            item = item,
-                            widgetManager = widgetManager,
-                            viewModel = viewModel,
-                            onSuccess = onNavigateBack,
-                            onError = { msg -> scope.launch { snackbarHostState.showSnackbar(msg) } }
-                        )
-                    }) { Text("Add to Board") }
-                }
+                TextButton(onClick = {
+                    selectedForAction = null
+                    bindAndAddWidget(
+                        context = context,
+                        item = item,
+                        widgetManager = widgetManager,
+                        viewModel = viewModel,
+                        onSuccess = onNavigateBack,
+                        onError = { msg -> scope.launch { snackbarHostState.showSnackbar(msg) } }
+                    )
+                }) { Text("Add to Board") }
             },
             dismissButton = {
                 TextButton(onClick = { selectedForAction = null }) { Text("Cancel") }
@@ -250,21 +239,3 @@ private fun bindAndAddWidget(
     }
 }
 
-private fun pinWidgetToHomeScreen(
-    context: android.content.Context,
-    item: WidgetProviderItem,
-    onSuccess: (String) -> Unit,
-    onError: (String) -> Unit
-) {
-    val awm = AppWidgetManager.getInstance(context)
-    if (!awm.isRequestPinAppWidgetSupported()) {
-        onError("Pixel Launcher doesn't support widget pinning via this API")
-        return
-    }
-    val sent = awm.requestPinAppWidget(item.provider, null, null)
-    if (sent) {
-        onSuccess("Check your home screen to place the widget")
-    } else {
-        onError("Pin request rejected — try going to your home screen and adding the widget manually")
-    }
-}
