@@ -18,7 +18,7 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import kotlinx.coroutines.launch
 
-private const val ADB_COMMAND = "adb shell pm grant com.widgetwesizer.app android.permission.BIND_APPWIDGET"
+private const val ADB_COMMAND = "adb shell appwidget grantbind --package com.widgetwesizer.app --user 0"
 
 @Composable
 fun PermissionScreen(onPermissionGranted: () -> Unit) {
