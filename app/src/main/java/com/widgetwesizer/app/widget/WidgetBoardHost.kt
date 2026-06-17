@@ -15,7 +15,7 @@ class WidgetBoardHost(context: Context) : AppWidgetHost(context, HOST_ID) {
         return WidgetBoardHostView(context)
     }
 
-    fun startListening() {
+    override fun startListening() {
         try {
             super.startListening()
         } catch (e: Exception) {
@@ -23,7 +23,7 @@ class WidgetBoardHost(context: Context) : AppWidgetHost(context, HOST_ID) {
         }
     }
 
-    fun stopListening() {
+    override fun stopListening() {
         try {
             super.stopListening()
         } catch (e: Exception) {
