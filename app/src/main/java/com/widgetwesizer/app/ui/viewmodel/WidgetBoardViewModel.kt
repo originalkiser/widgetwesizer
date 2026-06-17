@@ -103,7 +103,14 @@ class WidgetBoardViewModel(
     }
 
     fun getAllAvailableWidgets(context: Context): List<AppWidgetProviderInfo> {
-        return AppWidgetManager.getInstance(context).installedProviders
+        val awm = AppWidgetManager.getInstance(context)
+        // OR all categories so every installed provider is returned, not just HOME_SCREEN.
+        // BIND_APPWIDGET permission (granted via grantbind) is also required for the
+        // service to return third-party providers.
+        val allCategories = AppWidgetProviderInfo.WIDGET_CATEGORY_HOME_SCREEN or
+                AppWidgetProviderInfo.WIDGET_CATEGORY_KEYGUARD or
+                AppWidgetProviderInfo.WIDGET_CATEGORY_SEARCHBOX
+        return awm.getInstalledProviders(allCategories)
     }
 
     fun cleanupRemovedProviders(context: Context) {

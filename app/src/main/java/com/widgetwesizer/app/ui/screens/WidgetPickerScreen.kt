@@ -6,7 +6,6 @@ import android.content.ComponentName
 import android.content.pm.PackageManager
 import android.graphics.drawable.Drawable
 import android.os.Bundle
-import androidx.compose.foundation.Image
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
@@ -21,6 +20,7 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
 import android.widget.ImageView
+import kotlinx.coroutines.launch
 import com.widgetwesizer.app.data.model.WidgetEntry
 import com.widgetwesizer.app.ui.viewmodel.WidgetBoardViewModel
 import com.widgetwesizer.app.widget.WidgetManager
@@ -35,6 +35,7 @@ fun WidgetPickerScreen(
     val context = LocalContext.current
     val snackbarHostState = remember { SnackbarHostState() }
     val scope = rememberCoroutineScope()
+    var selectedForAction by remember { mutableStateOf<AppWidgetProviderInfo?>(null) }
 
     val allWidgets = remember {
         viewModel.getAllAvailableWidgets(context)
@@ -43,6 +44,39 @@ fun WidgetPickerScreen(
 
     val grouped = remember(allWidgets) {
         allWidgets.groupBy { getAppLabel(context, it) }.toSortedMap()
+    }
+
+    // Destination choice dialog
+    selectedForAction?.let { info ->
+        AlertDialog(
+            onDismissRequest = { selectedForAction = null },
+            title = { Text(info.loadLabel(context.packageManager)) },
+            text = { Text("Add to the WidgetWesizer canvas, or pin directly to your home screen?") },
+            confirmButton = {
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    TextButton(onClick = {
+                        selectedForAction = null
+                        pinWidgetToHomeScreen(context, info) { msg ->
+                            scope.launch { snackbarHostState.showSnackbar(msg) }
+                        }
+                    }) { Text("Home Screen") }
+                    TextButton(onClick = {
+                        selectedForAction = null
+                        bindAndAddWidget(
+                            context = context,
+                            info = info,
+                            widgetManager = widgetManager,
+                            viewModel = viewModel,
+                            onSuccess = onNavigateBack,
+                            onError = { msg -> scope.launch { snackbarHostState.showSnackbar(msg) } }
+                        )
+                    }) { Text("Add to Board") }
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { selectedForAction = null }) { Text("Cancel") }
+            }
+        )
     }
 
     Scaffold(
@@ -76,18 +110,7 @@ fun WidgetPickerScreen(
                 items(widgets) { info ->
                     WidgetPickerItem(
                         info = info,
-                        onSelect = {
-                            bindAndAddWidget(
-                                context = context,
-                                info = info,
-                                widgetManager = widgetManager,
-                                viewModel = viewModel,
-                                onSuccess = onNavigateBack,
-                                onError = { msg ->
-                                    // Show error via snackbar after returning from composable
-                                }
-                            )
-                        }
+                        onSelect = { selectedForAction = info }
                     )
                 }
             }
@@ -220,4 +243,18 @@ private fun getAppLabel(context: android.content.Context, info: AppWidgetProvide
 
 private fun pxToDp(context: android.content.Context, px: Int): Int {
     return (px * 160f / context.resources.displayMetrics.densityDpi).toInt()
+}
+
+private fun pinWidgetToHomeScreen(
+    context: android.content.Context,
+    info: AppWidgetProviderInfo,
+    onError: (String) -> Unit
+) {
+    val awm = AppWidgetManager.getInstance(context)
+    if (!awm.isRequestPinAppWidgetSupported()) {
+        onError("Your home screen launcher doesn't support pinning widgets")
+        return
+    }
+    val provider = ComponentName(info.provider.packageName, info.provider.className)
+    awm.requestPinAppWidget(provider, null, null)
 }
