@@ -1,5 +1,6 @@
 package com.widgetwesizer.app.ui.screens
 
+import android.appwidget.AppWidgetManager
 import android.graphics.drawable.Drawable
 import android.os.Bundle
 import android.widget.ImageView
