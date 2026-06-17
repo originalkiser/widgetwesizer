@@ -21,6 +21,7 @@ import com.widgetwesizer.app.ui.navigation.NavGraph
 import com.widgetwesizer.app.ui.theme.WidgetWesizerTheme
 import com.widgetwesizer.app.ui.viewmodel.WidgetBoardViewModel
 import com.widgetwesizer.app.widget.BoardSnapshot
+import com.widgetwesizer.app.widget.SnapshotWorker
 import com.widgetwesizer.app.widget.WidgetManager
 
 class MainActivity : ComponentActivity() {
@@ -58,6 +59,7 @@ class MainActivity : ComponentActivity() {
 
         widgetManager.setBindLauncher(bindWidgetLauncher)
         widgetManager.setConfigureLauncher(configureWidgetLauncher)
+        SnapshotWorker.schedule(this)
 
         setContent {
             WidgetWesizerTheme {
