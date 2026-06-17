@@ -1,16 +1,17 @@
 package com.widgetwesizer.app.ui.viewmodel
 
 import android.app.Application
-import android.appwidget.AppWidgetManager
-import android.appwidget.AppWidgetProviderInfo
-import android.content.Context
 import android.appwidget.AppWidgetHost
+import android.appwidget.AppWidgetManager
+import android.content.Context
+import android.content.Intent
 import android.content.pm.PackageManager
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewModelScope
 import com.widgetwesizer.app.data.model.WidgetEntry
+import com.widgetwesizer.app.data.model.WidgetProviderItem
 import com.widgetwesizer.app.data.repository.WidgetRepository
 import com.widgetwesizer.app.widget.WidgetManager
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -102,11 +103,80 @@ class WidgetBoardViewModel(
         }
     }
 
-    fun getAllAvailableWidgets(context: Context): List<AppWidgetProviderInfo> {
-        // installedProviders returns WIDGET_CATEGORY_HOME_SCREEN, which is the category
-        // every third-party widget declares. The BIND_APPWIDGET permission (granted via
-        // grantbind) is what gates whether third-party providers appear in the list.
-        return AppWidgetManager.getInstance(context).installedProviders
+    fun getAllAvailableWidgets(context: Context): List<WidgetProviderItem> {
+        val awm = AppWidgetManager.getInstance(context)
+        val pm = context.packageManager
+
+        // AppWidgetManager.installedProviders is permission-gated: without BIND_APPWIDGET
+        // granted at the PackageManager level (blocked on Android 12+), it only returns
+        // system/whitelisted providers. We bypass it by querying PackageManager directly
+        // for all broadcast receivers that handle ACTION_APPWIDGET_UPDATE — every widget
+        // provider must declare this, so this gives us the full list with no permission gate.
+        val knownMap = awm.installedProviders.associateBy { it.provider }
+
+        val receivers = pm.queryBroadcastReceivers(
+            Intent(AppWidgetManager.ACTION_APPWIDGET_UPDATE),
+            PackageManager.GET_META_DATA
+        )
+
+        return receivers.mapNotNull { ri ->
+            val ai = ri.activityInfo ?: return@mapNotNull null
+            val component = android.content.ComponentName(ai.packageName, ai.name)
+            val providerInfo = knownMap[component]
+
+            val appLabel = try {
+                pm.getApplicationLabel(pm.getApplicationInfo(ai.packageName, 0)).toString()
+            } catch (e: Exception) { ai.packageName }
+
+            val widgetLabel = providerInfo?.loadLabel(pm)
+                ?: ri.loadLabel(pm)?.toString()
+                ?: appLabel
+
+            val (minW, minH) = if (providerInfo != null) {
+                providerInfo.minWidth to providerInfo.minHeight
+            } else {
+                parseWidgetDimensions(context, ai)
+            }
+
+            WidgetProviderItem(
+                provider = component,
+                label = widgetLabel,
+                appLabel = appLabel,
+                minWidthPx = minW,
+                minHeightPx = minH,
+                providerInfo = providerInfo
+            )
+        }.sortedWith(compareBy({ it.appLabel.lowercase() }, { it.label.lowercase() }))
+    }
+
+    private fun parseWidgetDimensions(
+        context: Context,
+        ai: android.content.pm.ActivityInfo
+    ): Pair<Int, Int> {
+        val xmlResId = ai.metaData
+            ?.getInt(AppWidgetManager.META_DATA_APPWIDGET_PROVIDER, 0) ?: 0
+        if (xmlResId == 0) return 0 to 0
+        return try {
+            val pkgCtx = context.createPackageContext(ai.packageName, 0)
+            val parser = pkgCtx.resources.getXml(xmlResId)
+            var eventType = parser.eventType
+            while (eventType != org.xmlpull.v1.XmlPullParser.END_DOCUMENT) {
+                if (eventType == org.xmlpull.v1.XmlPullParser.START_TAG
+                    && parser.name == "appwidget-provider"
+                ) {
+                    val ta = pkgCtx.obtainStyledAttributes(
+                        android.util.Xml.asAttributeSet(parser),
+                        intArrayOf(android.R.attr.minWidth, android.R.attr.minHeight)
+                    )
+                    val w = ta.getDimensionPixelSize(0, 0)
+                    val h = ta.getDimensionPixelSize(1, 0)
+                    ta.recycle()
+                    return w to h
+                }
+                eventType = parser.next()
+            }
+            0 to 0
+        } catch (e: Exception) { 0 to 0 }
     }
 
     fun cleanupRemovedProviders(context: Context) {
