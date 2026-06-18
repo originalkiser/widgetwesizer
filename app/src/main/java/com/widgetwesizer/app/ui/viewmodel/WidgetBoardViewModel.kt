@@ -10,7 +10,7 @@ import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewModelScope
-import com.widgetwesizer.app.data.model.ViewportEntry
+import com.widgetwesizer.app.data.model.GridSelection
 import com.widgetwesizer.app.data.model.WidgetEntry
 import com.widgetwesizer.app.data.model.WidgetProviderItem
 import com.widgetwesizer.app.data.repository.WidgetRepository
@@ -31,14 +31,8 @@ class WidgetBoardViewModel(
     val widgets: StateFlow<List<WidgetEntry>> = repository.getWidgets()
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
 
-    val viewport: StateFlow<ViewportEntry> = repository.getViewport()
-        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), ViewportEntry())
-
-    fun updateViewport(viewport: ViewportEntry) {
-        viewModelScope.launch {
-            repository.saveViewport(viewport)
-        }
-    }
+    val gridSelections: StateFlow<List<GridSelection>> = repository.getGridSelections()
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
 
     private val _isPermissionGranted = MutableStateFlow(checkPermission())
     val isPermissionGranted: StateFlow<Boolean> = _isPermissionGranted
@@ -52,9 +46,6 @@ class WidgetBoardViewModel(
 
     private fun checkPermission(): Boolean {
         val app = getApplication<Application>()
-        // PackageManager.checkPermission only reflects pm-granted permissions.
-        // On Android 12+, grantbind sets permission at the AppWidgetService level,
-        // which bindAppWidgetIdIfAllowed checks internally. Test-bind to detect it.
         val awm = AppWidgetManager.getInstance(app)
         val providers = awm.installedProviders
         if (providers.isEmpty()) {
@@ -100,12 +91,7 @@ class WidgetBoardViewModel(
         viewModelScope.launch {
             val current = widgets.value.map { entry ->
                 if (entry.appWidgetId == appWidgetId) {
-                    entry.copy(
-                        widthDp = widthDp,
-                        heightDp = heightDp,
-                        offsetXDp = offsetXDp,
-                        offsetYDp = offsetYDp
-                    )
+                    entry.copy(widthDp = widthDp, heightDp = heightDp, offsetXDp = offsetXDp, offsetYDp = offsetYDp)
                 } else entry
             }
             repository.saveWidgets(current)
@@ -113,41 +99,52 @@ class WidgetBoardViewModel(
         }
     }
 
+    fun addGridSelection() {
+        viewModelScope.launch {
+            val current = gridSelections.value.toMutableList()
+            val newId = (current.maxOfOrNull { it.id } ?: 0) + 1
+            // Offset each new selection so they don't all stack at (0,0)
+            val offset = (newId - 1) * 100f
+            current.add(GridSelection(id = newId, cols = 2, rows = 2, boardX = offset, boardY = offset))
+            repository.saveGridSelections(current)
+        }
+    }
+
+    fun updateGridSelection(selection: GridSelection) {
+        viewModelScope.launch {
+            val current = gridSelections.value.map { if (it.id == selection.id) selection else it }
+            repository.saveGridSelections(current)
+        }
+    }
+
+    fun removeGridSelection(id: Int) {
+        viewModelScope.launch {
+            val current = gridSelections.value.filter { it.id != id }
+            repository.saveGridSelections(current)
+        }
+    }
+
     fun getAllAvailableWidgets(context: Context): List<WidgetProviderItem> {
         val awm = AppWidgetManager.getInstance(context)
         val pm = context.packageManager
-
-        // AppWidgetManager.installedProviders is permission-gated: without BIND_APPWIDGET
-        // granted at the PackageManager level (blocked on Android 12+), it only returns
-        // system/whitelisted providers. We bypass it by querying PackageManager directly
-        // for all broadcast receivers that handle ACTION_APPWIDGET_UPDATE — every widget
-        // provider must declare this, so this gives us the full list with no permission gate.
         val knownMap = awm.installedProviders.associateBy { it.provider }
-
         val receivers = pm.queryBroadcastReceivers(
             Intent(AppWidgetManager.ACTION_APPWIDGET_UPDATE),
             PackageManager.GET_META_DATA
         )
-
         return receivers.mapNotNull { ri ->
             val ai = ri.activityInfo ?: return@mapNotNull null
             val component = android.content.ComponentName(ai.packageName, ai.name)
             val providerInfo = knownMap[component]
-
             val appLabel = try {
                 pm.getApplicationLabel(pm.getApplicationInfo(ai.packageName, 0)).toString()
             } catch (e: Exception) { ai.packageName }
-
-            val widgetLabel = providerInfo?.loadLabel(pm)
-                ?: ri.loadLabel(pm)?.toString()
-                ?: appLabel
-
+            val widgetLabel = providerInfo?.loadLabel(pm) ?: ri.loadLabel(pm)?.toString() ?: appLabel
             val (minW, minH) = if (providerInfo != null) {
                 providerInfo.minWidth to providerInfo.minHeight
             } else {
                 parseWidgetDimensions(context, ai)
             }
-
             WidgetProviderItem(
                 provider = component,
                 label = widgetLabel,
@@ -163,17 +160,14 @@ class WidgetBoardViewModel(
         context: Context,
         ai: android.content.pm.ActivityInfo
     ): Pair<Int, Int> {
-        val xmlResId = ai.metaData
-            ?.getInt(AppWidgetManager.META_DATA_APPWIDGET_PROVIDER, 0) ?: 0
+        val xmlResId = ai.metaData?.getInt(AppWidgetManager.META_DATA_APPWIDGET_PROVIDER, 0) ?: 0
         if (xmlResId == 0) return 0 to 0
         return try {
             val pkgCtx = context.createPackageContext(ai.packageName, 0)
             val parser = pkgCtx.resources.getXml(xmlResId)
             var eventType = parser.eventType
             while (eventType != org.xmlpull.v1.XmlPullParser.END_DOCUMENT) {
-                if (eventType == org.xmlpull.v1.XmlPullParser.START_TAG
-                    && parser.name == "appwidget-provider"
-                ) {
+                if (eventType == org.xmlpull.v1.XmlPullParser.START_TAG && parser.name == "appwidget-provider") {
                     val ta = pkgCtx.obtainStyledAttributes(
                         android.util.Xml.asAttributeSet(parser),
                         intArrayOf(android.R.attr.minWidth, android.R.attr.minHeight)
@@ -194,12 +188,8 @@ class WidgetBoardViewModel(
             val pm = context.packageManager
             val current = widgets.value
             val (valid, removed) = current.partition { entry ->
-                try {
-                    pm.getPackageInfo(entry.packageName, 0)
-                    true
-                } catch (e: PackageManager.NameNotFoundException) {
-                    false
-                }
+                try { pm.getPackageInfo(entry.packageName, 0); true }
+                catch (e: PackageManager.NameNotFoundException) { false }
             }
             if (removed.isNotEmpty()) {
                 removed.forEach { widgetManager.deleteWidget(it.appWidgetId) }
