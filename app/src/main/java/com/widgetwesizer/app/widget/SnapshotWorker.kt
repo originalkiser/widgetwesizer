@@ -11,9 +11,13 @@ import android.view.View
 import androidx.work.Constraints
 import androidx.work.CoroutineWorker
 import androidx.work.ExistingPeriodicWorkPolicy
+import androidx.work.ExistingWorkPolicy
+import androidx.work.OneTimeWorkRequestBuilder
 import androidx.work.PeriodicWorkRequestBuilder
 import androidx.work.WorkManager
 import androidx.work.WorkerParameters
+import com.widgetwesizer.app.data.model.ViewportEntry
+import com.widgetwesizer.app.data.model.WidgetEntry
 import com.widgetwesizer.app.data.repository.WidgetRepository
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.first
@@ -27,23 +31,27 @@ class SnapshotWorker(
 
     override suspend fun doWork(): Result {
         val widgets = WidgetRepository(ctx).getWidgets().first()
-        if (widgets.isEmpty()) return Result.success()
+        val viewport = WidgetRepository(ctx).getViewport().first()
+        if (widgets.isEmpty()) {
+            BoardSnapshot.pushToHomeScreenWidgets(ctx)
+            return Result.success()
+        }
 
-        val bitmap = withContext(Dispatchers.Main) { renderBoard() }
+        val bitmap = withContext(Dispatchers.Main) { renderBoard(widgets, viewport) }
         if (bitmap != null) {
             BoardSnapshot.save(ctx, bitmap)
         }
-        // Always push — even if render failed, refresh the widget with the last saved snapshot
+        // Always push — even if render failed, refresh with last saved snapshot
         BoardSnapshot.pushToHomeScreenWidgets(ctx)
         return Result.success()
     }
 
-    private fun renderBoard(): Bitmap? {
+    private fun renderBoard(widgets: List<WidgetEntry>, viewport: ViewportEntry): Bitmap? {
         val awm = AppWidgetManager.getInstance(ctx)
         val density = ctx.resources.displayMetrics.density
 
-        // Use the same host ID so the AppWidget service routes cached RemoteViews to us
-        val host = object : AppWidgetHost(ctx, WidgetBoardHost.HOST_ID) {
+        // Use a distinct HOST_ID so we never displace the main app's host (1001)
+        val host = object : AppWidgetHost(ctx, WORKER_HOST_ID) {
             override fun onCreateView(
                 context: Context,
                 appWidgetId: Int,
@@ -52,28 +60,30 @@ class SnapshotWorker(
         }
 
         return try {
-            val widgets = WidgetRepository(ctx).getWidgets()
-                .let { kotlinx.coroutines.runBlocking { it.first() } }
+            // Scale to fit the viewport into the 720×400 snapshot budget
+            val vpWpx = viewport.width * density
+            val vpHpx = viewport.height * density
+            val scale = minOf(720f / vpWpx, 400f / vpHpx)
 
-            // Register views in the host's internal map BEFORE startListening so that
-            // the synchronous cached-RemoteViews delivery inside startListening hits them
-            val entries = widgets.map { entry ->
-                entry to host.createView(ctx, entry.appWidgetId, awm.getAppWidgetInfo(entry.appWidgetId))
+            val bmpW = (vpWpx * scale).toInt().coerceAtLeast(1)
+            val bmpH = (vpHpx * scale).toInt().coerceAtLeast(1)
+
+            // Create views before startListening so cached RemoteViews land on them
+            val entries = widgets.mapNotNull { entry ->
+                val info = awm.getAppWidgetInfo(entry.appWidgetId) ?: return@mapNotNull null
+                entry to host.createView(ctx, entry.appWidgetId, info)
             }
 
-            // startListening delivers cached RemoteViews synchronously to already-created views
             host.startListening()
 
-            // Board canvas is 2000dp; scale to fit our 720×400 snapshot budget
-            val boardDp = 2000f
-            val maxW = 720
-            val maxH = 400
-            val scale = minOf(maxW / (boardDp * density), maxH / (boardDp * density))
-
-            val bmpW = (boardDp * density * scale).toInt().coerceAtLeast(1)
-            val bmpH = (boardDp * density * scale).toInt().coerceAtLeast(1)
             val bitmap = Bitmap.createBitmap(bmpW, bmpH, Bitmap.Config.ARGB_8888)
             val canvas = Canvas(bitmap)
+
+            // Shift canvas so only the viewport region is drawn into the bitmap
+            canvas.translate(
+                -(viewport.x * density * scale),
+                -(viewport.y * density * scale)
+            )
 
             for ((entry, view) in entries) {
                 val wPx = (entry.widthDp * density * scale).toInt().coerceAtLeast(1)
@@ -103,6 +113,8 @@ class SnapshotWorker(
 
     companion object {
         private const val WORK_NAME = "board_snapshot_periodic"
+        private const val WORK_NAME_ONCE = "board_snapshot_once"
+        private const val WORKER_HOST_ID = 1002
 
         fun schedule(context: Context) {
             val request = PeriodicWorkRequestBuilder<SnapshotWorker>(15, TimeUnit.MINUTES)
@@ -115,6 +127,15 @@ class SnapshotWorker(
             WorkManager.getInstance(context).enqueueUniquePeriodicWork(
                 WORK_NAME,
                 ExistingPeriodicWorkPolicy.KEEP,
+                request
+            )
+        }
+
+        fun scheduleOneTime(context: Context) {
+            val request = OneTimeWorkRequestBuilder<SnapshotWorker>().build()
+            WorkManager.getInstance(context).enqueueUniqueWork(
+                WORK_NAME_ONCE,
+                ExistingWorkPolicy.REPLACE,
                 request
             )
         }

@@ -6,6 +6,7 @@ import androidx.datastore.preferences.core.Preferences
 import androidx.datastore.preferences.core.edit
 import androidx.datastore.preferences.core.stringPreferencesKey
 import androidx.datastore.preferences.preferencesDataStore
+import com.widgetwesizer.app.data.model.ViewportEntry
 import com.widgetwesizer.app.data.model.WidgetEntry
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.map
@@ -17,6 +18,7 @@ private val Context.dataStore: DataStore<Preferences> by preferencesDataStore(na
 class WidgetRepository(private val context: Context) {
 
     private val widgetEntriesKey = stringPreferencesKey("widget_board_entries")
+    private val viewportKey = stringPreferencesKey("board_viewport")
     private val json = Json { ignoreUnknownKeys = true }
 
     suspend fun saveWidgets(entries: List<WidgetEntry>) {
@@ -33,6 +35,19 @@ class WidgetRepository(private val context: Context) {
             } catch (e: Exception) {
                 emptyList()
             }
+        }
+    }
+
+    suspend fun saveViewport(viewport: ViewportEntry) {
+        context.dataStore.edit { prefs ->
+            prefs[viewportKey] = json.encodeToString(viewport)
+        }
+    }
+
+    fun getViewport(): Flow<ViewportEntry> {
+        return context.dataStore.data.map { prefs ->
+            val raw = prefs[viewportKey] ?: return@map ViewportEntry()
+            try { json.decodeFromString<ViewportEntry>(raw) } catch (e: Exception) { ViewportEntry() }
         }
     }
 }

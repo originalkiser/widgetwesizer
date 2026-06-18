@@ -1,7 +1,6 @@
 package com.widgetwesizer.app.ui.screens
 
 import android.appwidget.AppWidgetManager
-import android.appwidget.AppWidgetProviderInfo
 import androidx.compose.foundation.background
 import androidx.compose.foundation.gestures.detectDragGestures
 import androidx.compose.foundation.gestures.detectTapGestures
@@ -24,12 +23,13 @@ import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
 import com.widgetwesizer.app.data.model.WidgetEntry
-import com.widgetwesizer.app.widget.WidgetBoardHostView
 import com.widgetwesizer.app.widget.WidgetManager
 import kotlin.math.roundToInt
 
+internal const val CELL_DP = 100f
 private const val MIN_SIZE_DP = 40f
-private const val GRID_DP = 8f
+private const val MAX_COLS = 4
+private const val MAX_ROWS = 5
 
 @Composable
 fun WidgetCard(
@@ -49,18 +49,26 @@ fun WidgetCard(
     var isEditMode by remember { mutableStateOf(false) }
     var showDeleteConfirm by remember { mutableStateOf(false) }
 
+    // Use getAppWidgetInfo so the provider renders at the correct size from first mount
     val providerInfo = remember(entry.appWidgetId) {
-        AppWidgetManager.getInstance(context).installedProviders.find {
-            it.provider.packageName == entry.packageName && it.provider.className == entry.className
-        }
+        AppWidgetManager.getInstance(context).getAppWidgetInfo(entry.appWidgetId)
+    }
+
+    // Tell the provider about our display size immediately on mount, not just after drag
+    LaunchedEffect(entry.appWidgetId) {
+        widgetManager.updateWidgetSize(entry.appWidgetId, entry.widthDp.toInt(), entry.heightDp.toInt())
     }
 
     fun snap(value: Float) = if (snapToGrid) {
-        (value / GRID_DP).roundToInt() * GRID_DP
+        (value / CELL_DP).roundToInt() * CELL_DP
     } else value
 
-    fun snapSize(value: Float) = if (snapToGrid) {
-        ((value / GRID_DP).roundToInt() * GRID_DP).coerceAtLeast(MIN_SIZE_DP)
+    fun snapWidth(value: Float) = if (snapToGrid) {
+        ((value / CELL_DP).roundToInt() * CELL_DP).coerceIn(CELL_DP, MAX_COLS * CELL_DP)
+    } else value.coerceAtLeast(MIN_SIZE_DP)
+
+    fun snapHeight(value: Float) = if (snapToGrid) {
+        ((value / CELL_DP).roundToInt() * CELL_DP).coerceIn(CELL_DP, MAX_ROWS * CELL_DP)
     } else value.coerceAtLeast(MIN_SIZE_DP)
 
     if (showDeleteConfirm) {
@@ -197,8 +205,8 @@ fun WidgetCard(
                 height = height,
                 density = density,
                 onResize = { dw, dh, dx, dy ->
-                    width = snapSize(width + dw)
-                    height = snapSize(height + dh)
+                    width = snapWidth(width + dw)
+                    height = snapHeight(height + dh)
                     if (dx != 0f) offsetX = snap((offsetX + dx).coerceAtLeast(0f))
                     if (dy != 0f) offsetY = snap((offsetY + dy).coerceAtLeast(0f))
                 },

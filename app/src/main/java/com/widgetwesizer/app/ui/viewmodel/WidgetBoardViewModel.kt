@@ -10,6 +10,7 @@ import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewModelScope
+import com.widgetwesizer.app.data.model.ViewportEntry
 import com.widgetwesizer.app.data.model.WidgetEntry
 import com.widgetwesizer.app.data.model.WidgetProviderItem
 import com.widgetwesizer.app.data.repository.WidgetRepository
@@ -29,6 +30,15 @@ class WidgetBoardViewModel(
 
     val widgets: StateFlow<List<WidgetEntry>> = repository.getWidgets()
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
+
+    val viewport: StateFlow<ViewportEntry> = repository.getViewport()
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), ViewportEntry())
+
+    fun updateViewport(viewport: ViewportEntry) {
+        viewModelScope.launch {
+            repository.saveViewport(viewport)
+        }
+    }
 
     private val _isPermissionGranted = MutableStateFlow(checkPermission())
     val isPermissionGranted: StateFlow<Boolean> = _isPermissionGranted
