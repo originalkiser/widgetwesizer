@@ -45,6 +45,15 @@ class WidgetWezizerAppWidgetProvider : AppWidgetProvider() {
         }
     }
 
+    override fun onAppWidgetOptionsChanged(
+        context: Context,
+        appWidgetManager: AppWidgetManager,
+        appWidgetId: Int,
+        newOptions: android.os.Bundle
+    ) {
+        SnapshotWorker.scheduleOneTime(context)
+    }
+
     override fun onDeleted(context: Context, appWidgetIds: IntArray) {
         CoroutineScope(Dispatchers.IO).launch {
             val repo = WidgetRepository(context)

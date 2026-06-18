@@ -59,12 +59,9 @@ class SnapshotWorker(
         }
 
         return try {
-            val vpWpx = selection.cols * BOARD_CELL_PX * density
-            val vpHpx = selection.rows * BOARD_CELL_PX * density
-            val scale = minOf(720f / vpWpx, 400f / vpHpx)
-
-            val bmpW = (vpWpx * scale).toInt().coerceAtLeast(1)
-            val bmpH = (vpHpx * scale).toInt().coerceAtLeast(1)
+            val bmpW = selection.cols * CELL_RENDER_PX
+            val bmpH = selection.rows * CELL_RENDER_PX
+            val scale = CELL_RENDER_PX / (BOARD_CELL_PX * density)
 
             val entries = widgets.mapNotNull { entry ->
                 val info = awm.getAppWidgetInfo(entry.appWidgetId) ?: return@mapNotNull null
@@ -112,6 +109,7 @@ class SnapshotWorker(
         private const val WORK_NAME_ONCE = "board_snapshot_once"
         private const val WORKER_HOST_ID = 1002
         private const val BOARD_CELL_PX = 100f
+        private const val CELL_RENDER_PX = 360
 
         fun schedule(context: Context) {
             val request = PeriodicWorkRequestBuilder<SnapshotWorker>(15, TimeUnit.MINUTES)

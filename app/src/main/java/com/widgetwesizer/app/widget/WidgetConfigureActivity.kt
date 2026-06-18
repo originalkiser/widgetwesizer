@@ -72,6 +72,17 @@ private fun ConfigureScreen(appWidgetId: Int, onDone: () -> Unit) {
             configs.add(WidgetInstanceConfig(appWidgetId, selection.id))
             repository.saveWidgetInstanceConfigs(configs)
 
+            // Push size hints so the launcher places the widget at the right cell count
+            val cellDp = 74
+            val awm = AppWidgetManager.getInstance(context)
+            val opts = Bundle().apply {
+                putInt(AppWidgetManager.OPTION_APPWIDGET_MIN_WIDTH, selection.cols * cellDp)
+                putInt(AppWidgetManager.OPTION_APPWIDGET_MAX_WIDTH, selection.cols * cellDp)
+                putInt(AppWidgetManager.OPTION_APPWIDGET_MIN_HEIGHT, selection.rows * cellDp)
+                putInt(AppWidgetManager.OPTION_APPWIDGET_MAX_HEIGHT, selection.rows * cellDp)
+            }
+            awm.updateAppWidgetOptions(appWidgetId, opts)
+
             SnapshotWorker.scheduleOneTime(context)
 
             val resultIntent = Intent().putExtra(AppWidgetManager.EXTRA_APPWIDGET_ID, appWidgetId)
