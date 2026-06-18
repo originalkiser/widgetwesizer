@@ -123,6 +123,7 @@ fun BoardScreen(
                             entry = entry,
                             widgetManager = widgetManager,
                             snapToGrid = snapToGrid,
+                            gridSelections = gridSelections,
                             onUpdateBounds = { id, w, h, x, y ->
                                 viewModel.updateWidgetBounds(id, w, h, x, y)
                             },
