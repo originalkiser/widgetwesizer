@@ -1,12 +1,16 @@
 package com.widgetwesizer.app.widget
 
+import android.app.Activity
 import android.appwidget.AppWidgetManager
 import android.appwidget.AppWidgetProviderInfo
 import android.content.ComponentName
 import android.content.Context
 import android.content.Intent
+import android.os.Build
 import android.os.Bundle
+import android.util.Log
 import androidx.activity.result.ActivityResultLauncher
+import java.lang.ref.WeakReference
 
 class WidgetManager private constructor(private val context: Context) {
 
@@ -14,17 +18,23 @@ class WidgetManager private constructor(private val context: Context) {
     private val appWidgetManager = AppWidgetManager.getInstance(context)
 
     private var bindLauncher: ActivityResultLauncher<Intent>? = null
-    private var configureLauncher: ActivityResultLauncher<Intent>? = null
+    private var activityRef: WeakReference<Activity>? = null
 
-    private val pendingBindCallbacks = mutableMapOf<Int, (Boolean) -> Unit>()
-    private val pendingConfigureCallbacks = mutableMapOf<Int, (Boolean) -> Unit>()
+    // Only one bind or configure flow runs at a time, so track the widget id here
+    // instead of relying on the result Intent (some activities return no data).
+    private var pendingBind: Pair<Int, (Boolean) -> Unit>? = null
+    private var pendingConfigure: Pair<Int, (Boolean) -> Unit>? = null
 
     fun setBindLauncher(launcher: ActivityResultLauncher<Intent>) {
         bindLauncher = launcher
     }
 
-    fun setConfigureLauncher(launcher: ActivityResultLauncher<Intent>) {
-        configureLauncher = launcher
+    fun attachActivity(activity: Activity) {
+        activityRef = WeakReference(activity)
+    }
+
+    fun detachActivity(activity: Activity) {
+        if (activityRef?.get() === activity) activityRef = null
     }
 
     fun startListening() = host.startListening()
@@ -32,45 +42,103 @@ class WidgetManager private constructor(private val context: Context) {
 
     fun allocateWidgetId(): Int = host.allocateAppWidgetId()
 
+    /**
+     * Binds the widget silently if allowed (adb grantbind, or "Always allow" ticked before),
+     * otherwise shows Android's "Allow WidgetWesizer to create widgets?" dialog.
+     */
     fun bindWidget(
         appWidgetId: Int,
         provider: ComponentName,
         options: Bundle,
         onResult: (Boolean) -> Unit
     ) {
-        val bound = appWidgetManager.bindAppWidgetIdIfAllowed(appWidgetId, provider, options)
+        val bound = try {
+            appWidgetManager.bindAppWidgetIdIfAllowed(appWidgetId, provider, options)
+        } catch (e: Exception) {
+            Log.w(TAG, "bindAppWidgetIdIfAllowed failed for $provider", e)
+            false
+        }
         if (bound) {
             onResult(true)
-        } else {
-            pendingBindCallbacks[appWidgetId] = onResult
-            val intent = Intent(AppWidgetManager.ACTION_APPWIDGET_BIND).apply {
-                putExtra(AppWidgetManager.EXTRA_APPWIDGET_ID, appWidgetId)
-                putExtra(AppWidgetManager.EXTRA_APPWIDGET_PROVIDER, provider)
-                putExtra(AppWidgetManager.EXTRA_APPWIDGET_OPTIONS, options)
-            }
-            bindLauncher?.launch(intent)
+            return
+        }
+
+        val launcher = bindLauncher
+        if (launcher == null) {
+            onResult(false)
+            return
+        }
+        pendingBind = appWidgetId to onResult
+        val intent = Intent(AppWidgetManager.ACTION_APPWIDGET_BIND).apply {
+            putExtra(AppWidgetManager.EXTRA_APPWIDGET_ID, appWidgetId)
+            putExtra(AppWidgetManager.EXTRA_APPWIDGET_PROVIDER, provider)
+            putExtra(AppWidgetManager.EXTRA_APPWIDGET_OPTIONS, options)
+        }
+        try {
+            launcher.launch(intent)
+        } catch (e: Exception) {
+            Log.w(TAG, "Could not show bind dialog", e)
+            pendingBind = null
+            onResult(false)
         }
     }
 
+    fun onBindResult(resultCode: Int) {
+        val (_, cb) = pendingBind ?: return
+        pendingBind = null
+        cb(resultCode == Activity.RESULT_OK)
+    }
+
+    /**
+     * Opens the widget's own setup screen, if it has one.
+     *
+     * Must go through AppWidgetHost.startAppWidgetConfigureActivityForResult: many providers
+     * (e.g. Google Home) don't export their configure activity, so launching it directly
+     * throws a SecurityException. The host API asks the system to launch it for us.
+     */
     fun launchConfigureActivity(
         appWidgetId: Int,
         info: AppWidgetProviderInfo,
         onResult: (Boolean) -> Unit
     ) {
-        val configureComponent = info.configure ?: run {
+        if (info.configure == null) {
             onResult(true)
             return
         }
-        pendingConfigureCallbacks[appWidgetId] = onResult
-        val intent = Intent(AppWidgetManager.ACTION_APPWIDGET_CONFIGURE).apply {
-            component = configureComponent
-            putExtra(AppWidgetManager.EXTRA_APPWIDGET_ID, appWidgetId)
+        val activity = activityRef?.get()
+        if (activity == null) {
+            onResult(isConfigurationOptional(info))
+            return
         }
-        configureLauncher?.launch(intent)
+        pendingConfigure = appWidgetId to onResult
+        try {
+            host.startAppWidgetConfigureActivityForResult(
+                activity, appWidgetId, 0, REQUEST_CONFIGURE, null
+            )
+        } catch (e: Exception) {
+            Log.w(TAG, "Could not open configure activity for ${info.provider}", e)
+            pendingConfigure = null
+            // If setup is optional the widget still works with its defaults.
+            onResult(isConfigurationOptional(info))
+        }
     }
 
+    fun onConfigureResult(resultCode: Int) {
+        val (_, cb) = pendingConfigure ?: return
+        pendingConfigure = null
+        cb(resultCode == Activity.RESULT_OK)
+    }
+
+    private fun isConfigurationOptional(info: AppWidgetProviderInfo): Boolean =
+        Build.VERSION.SDK_INT >= Build.VERSION_CODES.S &&
+            (info.widgetFeatures and AppWidgetProviderInfo.WIDGET_FEATURE_CONFIGURATION_OPTIONAL) != 0
+
     fun deleteWidget(appWidgetId: Int) {
-        host.deleteAppWidgetId(appWidgetId)
+        try {
+            host.deleteAppWidgetId(appWidgetId)
+        } catch (e: Exception) {
+            Log.w(TAG, "deleteAppWidgetId failed", e)
+        }
     }
 
     fun createHostView(
@@ -88,22 +156,17 @@ class WidgetManager private constructor(private val context: Context) {
             putInt(AppWidgetManager.OPTION_APPWIDGET_MIN_HEIGHT, heightDp)
             putInt(AppWidgetManager.OPTION_APPWIDGET_MAX_HEIGHT, heightDp)
         }
-        appWidgetManager.updateAppWidgetOptions(appWidgetId, options)
-    }
-
-    fun onBindResult(appWidgetId: Int, success: Boolean) {
-        pendingBindCallbacks.remove(appWidgetId)?.invoke(success)
-    }
-
-    fun onConfigureResult(appWidgetId: Int, success: Boolean) {
-        val cb = pendingConfigureCallbacks.remove(appWidgetId)
-        if (!success) {
-            deleteWidget(appWidgetId)
+        try {
+            appWidgetManager.updateAppWidgetOptions(appWidgetId, options)
+        } catch (e: Exception) {
+            Log.w(TAG, "updateAppWidgetOptions failed", e)
         }
-        cb?.invoke(success)
     }
 
     companion object {
+        private const val TAG = "WidgetManager"
+        const val REQUEST_CONFIGURE = 4201
+
         @Volatile
         private var instance: WidgetManager? = null
 

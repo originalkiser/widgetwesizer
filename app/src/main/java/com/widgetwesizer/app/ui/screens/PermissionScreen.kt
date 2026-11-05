@@ -1,6 +1,5 @@
 package com.widgetwesizer.app.ui.screens
 
-import android.content.pm.PackageManager
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -11,7 +10,6 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalClipboardManager
-import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.style.TextAlign
@@ -21,8 +19,7 @@ import kotlinx.coroutines.launch
 private const val ADB_COMMAND = "adb shell appwidget grantbind --package com.widgetwesizer.app --user 0"
 
 @Composable
-fun PermissionScreen(onPermissionGranted: () -> Unit) {
-    val context = LocalContext.current
+fun PermissionScreen(onBack: () -> Unit) {
     val snackbarHostState = remember { SnackbarHostState() }
     val scope = rememberCoroutineScope()
     val clipboardManager = LocalClipboardManager.current
@@ -49,7 +46,7 @@ fun PermissionScreen(onPermissionGranted: () -> Unit) {
             Spacer(modifier = Modifier.height(24.dp))
 
             Text(
-                text = "One setup step required",
+                text = "Skip the permission pop-ups (optional)",
                 style = MaterialTheme.typography.headlineMedium,
                 color = MaterialTheme.colorScheme.onBackground,
                 textAlign = TextAlign.Center
@@ -58,8 +55,9 @@ fun PermissionScreen(onPermissionGranted: () -> Unit) {
             Spacer(modifier = Modifier.height(16.dp))
 
             Text(
-                text = "WidgetWesizer needs the BIND_APPWIDGET permission to host widgets from other apps. " +
-                       "This is a system-level permission that requires a one-time ADB grant.",
+                text = "When you add a widget, Android asks whether WidgetWesizer may create widgets. " +
+                       "Tick \"Always allow\" and you won't be asked again. " +
+                       "If you'd rather never see that pop-up, you can run this one-time ADB command instead.",
                 style = MaterialTheme.typography.bodyLarge,
                 color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.8f),
                 textAlign = TextAlign.Center
@@ -112,32 +110,14 @@ fun PermissionScreen(onPermissionGranted: () -> Unit) {
 
             Spacer(modifier = Modifier.height(32.dp))
 
-            Button(
-                onClick = {
-                    val granted = context.packageManager.checkPermission(
-                        "android.permission.BIND_APPWIDGET",
-                        context.packageName
-                    ) == PackageManager.PERMISSION_GRANTED
-
-                    if (granted) {
-                        onPermissionGranted()
-                    } else {
-                        scope.launch {
-                            snackbarHostState.showSnackbar(
-                                "Permission not yet granted. Make sure to run the ADB command and try again."
-                            )
-                        }
-                    }
-                },
-                modifier = Modifier.fillMaxWidth()
-            ) {
-                Text("I've run the command")
+            Button(onClick = onBack, modifier = Modifier.fillMaxWidth()) {
+                Text("Back")
             }
 
             Spacer(modifier = Modifier.height(16.dp))
 
             Text(
-                text = "This is only required for sideloaded builds. A launcher-registered version would not need this step.",
+                text = "Requires a computer with Android Platform-Tools and USB or wireless debugging turned on.",
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.5f),
                 textAlign = TextAlign.Center

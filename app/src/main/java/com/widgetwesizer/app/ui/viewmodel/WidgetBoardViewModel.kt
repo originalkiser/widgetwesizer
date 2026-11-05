@@ -1,7 +1,6 @@
 package com.widgetwesizer.app.ui.viewmodel
 
 import android.app.Application
-import android.appwidget.AppWidgetHost
 import android.appwidget.AppWidgetManager
 import android.content.Context
 import android.content.Intent
@@ -34,36 +33,8 @@ class WidgetBoardViewModel(
     val gridSelections: StateFlow<List<GridSelection>> = repository.getGridSelections()
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
 
-    private val _isPermissionGranted = MutableStateFlow(checkPermission())
-    val isPermissionGranted: StateFlow<Boolean> = _isPermissionGranted
-
     private val _removedWidgetNames = MutableStateFlow<List<String>>(emptyList())
     val removedWidgetNames: StateFlow<List<String>> = _removedWidgetNames
-
-    fun refreshPermission() {
-        _isPermissionGranted.value = checkPermission()
-    }
-
-    private fun checkPermission(): Boolean {
-        val app = getApplication<Application>()
-        val awm = AppWidgetManager.getInstance(app)
-        val providers = awm.installedProviders
-        if (providers.isEmpty()) {
-            return app.packageManager.checkPermission(
-                "android.permission.BIND_APPWIDGET", app.packageName
-            ) == PackageManager.PERMISSION_GRANTED
-        }
-        val tempHost = AppWidgetHost(app, 9998)
-        val id = tempHost.allocateAppWidgetId()
-        return try {
-            val bound = awm.bindAppWidgetIdIfAllowed(id, providers.first().provider)
-            tempHost.deleteAppWidgetId(id)
-            bound
-        } catch (e: Exception) {
-            tempHost.deleteAppWidgetId(id)
-            false
-        }
-    }
 
     fun addWidget(entry: WidgetEntry) {
         viewModelScope.launch {

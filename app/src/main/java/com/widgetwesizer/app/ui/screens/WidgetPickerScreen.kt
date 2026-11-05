@@ -10,6 +10,7 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.outlined.Info
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -28,7 +29,8 @@ import kotlinx.coroutines.launch
 fun WidgetPickerScreen(
     viewModel: WidgetBoardViewModel,
     widgetManager: WidgetManager,
-    onNavigateBack: () -> Unit
+    onNavigateBack: () -> Unit,
+    onOpenPermissionTip: () -> Unit
 ) {
     val context = LocalContext.current
     val snackbarHostState = remember { SnackbarHostState() }
@@ -74,6 +76,11 @@ fun WidgetPickerScreen(
                     IconButton(onClick = onNavigateBack) {
                         Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back")
                     }
+                },
+                actions = {
+                    IconButton(onClick = onOpenPermissionTip) {
+                        Icon(Icons.Outlined.Info, contentDescription = "Skip permission pop-ups")
+                    }
                 }
             )
         }
@@ -84,7 +91,7 @@ fun WidgetPickerScreen(
                 contentAlignment = Alignment.Center
             ) {
                 Text(
-                    "No widgets found. Make sure grantbind has been run.",
+                    "No widgets found on this device.",
                     style = MaterialTheme.typography.bodyMedium,
                     color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f)
                 )
@@ -190,25 +197,36 @@ private fun bindAndAddWidget(
     onSuccess: () -> Unit,
     onError: (String) -> Unit
 ) {
-    val appWidgetId = widgetManager.allocateWidgetId()
+    // Widget size options are in dp, not px.
+    val densityDpi = context.resources.displayMetrics.densityDpi
+    val minWDp = (item.minWidthPx * 160f / densityDpi).coerceAtLeast(40f)
+    val minHDp = (item.minHeightPx * 160f / densityDpi).coerceAtLeast(40f)
     val options = Bundle().apply {
-        putInt(AppWidgetManager.OPTION_APPWIDGET_MIN_WIDTH, item.minWidthPx.coerceAtLeast(1))
-        putInt(AppWidgetManager.OPTION_APPWIDGET_MAX_WIDTH, item.minWidthPx.coerceAtLeast(1))
-        putInt(AppWidgetManager.OPTION_APPWIDGET_MIN_HEIGHT, item.minHeightPx.coerceAtLeast(1))
-        putInt(AppWidgetManager.OPTION_APPWIDGET_MAX_HEIGHT, item.minHeightPx.coerceAtLeast(1))
+        putInt(AppWidgetManager.OPTION_APPWIDGET_MIN_WIDTH, minWDp.toInt())
+        putInt(AppWidgetManager.OPTION_APPWIDGET_MAX_WIDTH, minWDp.toInt())
+        putInt(AppWidgetManager.OPTION_APPWIDGET_MIN_HEIGHT, minHDp.toInt())
+        putInt(AppWidgetManager.OPTION_APPWIDGET_MAX_HEIGHT, minHDp.toInt())
+    }
+
+    val appWidgetId = try {
+        widgetManager.allocateWidgetId()
+    } catch (e: Exception) {
+        onError("Couldn't add widget: ${e.message ?: "unknown error"}")
+        return
+    }
+
+    fun fail(msg: String) {
+        widgetManager.deleteWidget(appWidgetId)
+        onError(msg)
     }
 
     widgetManager.bindWidget(appWidgetId, item.provider, options) { bound ->
         if (!bound) {
-            widgetManager.deleteWidget(appWidgetId)
-            onError("Failed to bind widget")
+            fail("Permission to add widgets was not granted")
             return@bindWidget
         }
 
         val addToBoard: () -> Unit = {
-            val densityDpi = context.resources.displayMetrics.densityDpi
-            val minWDp = (item.minWidthPx * 160f / densityDpi).coerceAtLeast(40f)
-            val minHDp = (item.minHeightPx * 160f / densityDpi).coerceAtLeast(40f)
             val entry = WidgetEntry(
                 appWidgetId = appWidgetId,
                 packageName = item.provider.packageName,
@@ -225,18 +243,16 @@ private fun bindAndAddWidget(
             onSuccess()
         }
 
+        // Re-read provider info after binding; it can be null for providers that weren't
+        // in installedProviders when the picker loaded.
         val providerInfo = item.providerInfo
+            ?: AppWidgetManager.getInstance(context).getAppWidgetInfo(appWidgetId)
         if (providerInfo?.configure != null) {
             widgetManager.launchConfigureActivity(appWidgetId, providerInfo) { configured ->
-                if (!configured) {
-                    onError("Widget configuration cancelled")
-                    return@launchConfigureActivity
-                }
-                addToBoard()
+                if (configured) addToBoard() else fail("Widget setup was cancelled")
             }
         } else {
             addToBoard()
         }
     }
 }
-

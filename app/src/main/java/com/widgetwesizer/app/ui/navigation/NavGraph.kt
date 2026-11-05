@@ -1,8 +1,6 @@
 package com.widgetwesizer.app.ui.navigation
 
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.collectAsState
-import androidx.compose.runtime.getValue
 import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
 import androidx.navigation.compose.rememberNavController
@@ -24,20 +22,12 @@ fun NavGraph(
     widgetManager: WidgetManager
 ) {
     val navController = rememberNavController()
-    val isPermissionGranted by viewModel.isPermissionGranted.collectAsState()
 
-    val startDestination = if (isPermissionGranted) Routes.BOARD else Routes.PERMISSION
-
-    NavHost(navController = navController, startDestination = startDestination) {
+    // No permission gate: Android asks the user to allow each widget the first time.
+    // The adb tip is optional and reachable from the widget picker.
+    NavHost(navController = navController, startDestination = Routes.BOARD) {
         composable(Routes.PERMISSION) {
-            PermissionScreen(
-                onPermissionGranted = {
-                    viewModel.refreshPermission()
-                    navController.navigate(Routes.BOARD) {
-                        popUpTo(Routes.PERMISSION) { inclusive = true }
-                    }
-                }
-            )
+            PermissionScreen(onBack = { navController.popBackStack() })
         }
         composable(Routes.BOARD) {
             BoardScreen(
@@ -50,7 +40,8 @@ fun NavGraph(
             WidgetPickerScreen(
                 viewModel = viewModel,
                 widgetManager = widgetManager,
-                onNavigateBack = { navController.popBackStack() }
+                onNavigateBack = { navController.popBackStack() },
+                onOpenPermissionTip = { navController.navigate(Routes.PERMISSION) }
             )
         }
     }

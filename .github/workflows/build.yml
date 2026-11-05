@@ -2,7 +2,7 @@ name: Build APK
 
 on:
   push:
-    branches: [ master, main ]
+    branches: [ master, main, 'claude/**' ]
   pull_request:
     branches: [ master, main ]
   workflow_dispatch:
@@ -63,10 +63,10 @@ jobs:
           path: WidgetWesizer.apk
           retention-days: 90
 
-      # Publish a GitHub Release on pushes to master/main so the APK can be
-      # downloaded from a phone without signing in to GitHub.
+      # Publish a GitHub Release only for master/main, so the APK can be downloaded
+      # from a phone without signing in. Other branches just build as a check.
       - name: Publish release
-        if: github.event_name == 'push' || github.event_name == 'workflow_dispatch'
+        if: github.event_name != 'pull_request' && (github.ref == 'refs/heads/master' || github.ref == 'refs/heads/main')
         uses: softprops/action-gh-release@v2
         with:
           tag_name: v${{ env.VERSION_NAME }}

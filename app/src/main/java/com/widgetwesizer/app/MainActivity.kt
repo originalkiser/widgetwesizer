@@ -1,6 +1,5 @@
 package com.widgetwesizer.app
 
-import android.appwidget.AppWidgetManager
 import android.content.Intent
 import android.os.Bundle
 import androidx.activity.ComponentActivity
@@ -24,34 +23,14 @@ class MainActivity : ComponentActivity() {
     private val bindWidgetLauncher = registerForActivityResult(
         ActivityResultContracts.StartActivityForResult()
     ) { result ->
-        val appWidgetId = result.data?.getIntExtra(
-            AppWidgetManager.EXTRA_APPWIDGET_ID, -1
-        ) ?: -1
-        if (result.resultCode == RESULT_OK && appWidgetId != -1) {
-            widgetManager.onBindResult(appWidgetId, success = true)
-        } else if (appWidgetId != -1) {
-            widgetManager.onBindResult(appWidgetId, success = false)
-        }
-    }
-
-    private val configureWidgetLauncher = registerForActivityResult(
-        ActivityResultContracts.StartActivityForResult()
-    ) { result ->
-        val appWidgetId = result.data?.getIntExtra(
-            AppWidgetManager.EXTRA_APPWIDGET_ID, -1
-        ) ?: -1
-        if (result.resultCode == RESULT_OK && appWidgetId != -1) {
-            widgetManager.onConfigureResult(appWidgetId, success = true)
-        } else if (appWidgetId != -1) {
-            widgetManager.onConfigureResult(appWidgetId, success = false)
-        }
+        widgetManager.onBindResult(result.resultCode)
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
 
         widgetManager.setBindLauncher(bindWidgetLauncher)
-        widgetManager.setConfigureLauncher(configureWidgetLauncher)
+        widgetManager.attachActivity(this)
         SnapshotWorker.schedule(this)
 
         setContent {
@@ -67,6 +46,20 @@ class MainActivity : ComponentActivity() {
                 }
             }
         }
+    }
+
+    // Configure activities are started via AppWidgetHost, which reports back here.
+    @Deprecated("Needed for AppWidgetHost.startAppWidgetConfigureActivityForResult")
+    override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
+        super.onActivityResult(requestCode, resultCode, data)
+        if (requestCode == WidgetManager.REQUEST_CONFIGURE) {
+            widgetManager.onConfigureResult(resultCode)
+        }
+    }
+
+    override fun onDestroy() {
+        widgetManager.detachActivity(this)
+        super.onDestroy()
     }
 
     override fun onResume() {
