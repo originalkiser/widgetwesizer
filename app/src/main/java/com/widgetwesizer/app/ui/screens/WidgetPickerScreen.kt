@@ -21,6 +21,7 @@ import androidx.compose.ui.viewinterop.AndroidView
 import com.widgetwesizer.app.data.model.WidgetEntry
 import com.widgetwesizer.app.data.model.WidgetProviderItem
 import com.widgetwesizer.app.ui.viewmodel.WidgetBoardViewModel
+import com.widgetwesizer.app.widget.ConfigureResult
 import com.widgetwesizer.app.widget.WidgetManager
 import kotlinx.coroutines.launch
 
@@ -226,7 +227,9 @@ private fun bindAndAddWidget(
             return@bindWidget
         }
 
-        val addToBoard: () -> Unit = {
+        // Add to the board before opening the widget's setup screen, so the widget isn't lost
+        // if setup hands off to another screen or the app is closed in the background.
+        run {
             val entry = WidgetEntry(
                 appWidgetId = appWidgetId,
                 packageName = item.provider.packageName,
@@ -240,7 +243,6 @@ private fun bindAndAddWidget(
                 minHeightDp = minHDp
             )
             viewModel.addWidget(entry)
-            onSuccess()
         }
 
         // Re-read provider info after binding; it can be null for providers that weren't
@@ -248,11 +250,24 @@ private fun bindAndAddWidget(
         val providerInfo = item.providerInfo
             ?: AppWidgetManager.getInstance(context).getAppWidgetInfo(appWidgetId)
         if (providerInfo?.configure != null) {
-            widgetManager.launchConfigureActivity(appWidgetId, providerInfo) { configured ->
-                if (configured) addToBoard() else fail("Widget setup was cancelled")
+            widgetManager.launchConfigureActivity(appWidgetId, providerInfo) { result ->
+                when (result) {
+                    ConfigureResult.OK -> Unit
+                    ConfigureResult.CANCELED -> viewModel.postBoardMessage(
+                        WidgetBoardViewModel.BoardMessage(
+                            "Setup for \"${item.label}\" was closed. If it looks empty, long-press it and tap ⚙ to set it up.",
+                            removeWidgetId = appWidgetId
+                        )
+                    )
+                    ConfigureResult.UNAVAILABLE -> {
+                        viewModel.removeWidget(appWidgetId)
+                        viewModel.postBoardMessage(
+                            WidgetBoardViewModel.BoardMessage("Couldn't open setup for \"${item.label}\"")
+                        )
+                    }
+                }
             }
-        } else {
-            addToBoard()
         }
+        onSuccess()
     }
 }

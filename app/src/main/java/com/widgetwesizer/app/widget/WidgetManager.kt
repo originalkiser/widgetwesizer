@@ -12,6 +12,19 @@ import android.util.Log
 import androidx.activity.result.ActivityResultLauncher
 import java.lang.ref.WeakReference
 
+enum class ConfigureResult {
+    /** Setup finished (or the widget needs none). */
+    OK,
+    /**
+     * Setup reported "cancelled". Some widgets (e.g. Google Home "Custom") close their first
+     * screen and continue in another one, which also reports cancelled, so this is not
+     * always a real cancel.
+     */
+    CANCELED,
+    /** The setup screen couldn't be opened and the widget requires it. */
+    UNAVAILABLE
+}
+
 class WidgetManager private constructor(private val context: Context) {
 
     private val host = WidgetBoardHost(context)
@@ -23,7 +36,7 @@ class WidgetManager private constructor(private val context: Context) {
     // Only one bind or configure flow runs at a time, so track the widget id here
     // instead of relying on the result Intent (some activities return no data).
     private var pendingBind: Pair<Int, (Boolean) -> Unit>? = null
-    private var pendingConfigure: Pair<Int, (Boolean) -> Unit>? = null
+    private var pendingConfigure: Pair<Int, (ConfigureResult) -> Unit>? = null
 
     fun setBindLauncher(launcher: ActivityResultLauncher<Intent>) {
         bindLauncher = launcher
@@ -99,15 +112,17 @@ class WidgetManager private constructor(private val context: Context) {
     fun launchConfigureActivity(
         appWidgetId: Int,
         info: AppWidgetProviderInfo,
-        onResult: (Boolean) -> Unit
+        onResult: (ConfigureResult) -> Unit
     ) {
         if (info.configure == null) {
-            onResult(true)
+            onResult(ConfigureResult.OK)
             return
         }
+        val unavailable =
+            if (isConfigurationOptional(info)) ConfigureResult.OK else ConfigureResult.UNAVAILABLE
         val activity = activityRef?.get()
         if (activity == null) {
-            onResult(isConfigurationOptional(info))
+            onResult(unavailable)
             return
         }
         pendingConfigure = appWidgetId to onResult
@@ -119,14 +134,14 @@ class WidgetManager private constructor(private val context: Context) {
             Log.w(TAG, "Could not open configure activity for ${info.provider}", e)
             pendingConfigure = null
             // If setup is optional the widget still works with its defaults.
-            onResult(isConfigurationOptional(info))
+            onResult(unavailable)
         }
     }
 
     fun onConfigureResult(resultCode: Int) {
         val (_, cb) = pendingConfigure ?: return
         pendingConfigure = null
-        cb(resultCode == Activity.RESULT_OK)
+        cb(if (resultCode == Activity.RESULT_OK) ConfigureResult.OK else ConfigureResult.CANCELED)
     }
 
     private fun isConfigurationOptional(info: AppWidgetProviderInfo): Boolean =

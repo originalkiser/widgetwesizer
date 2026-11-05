@@ -5,6 +5,10 @@ import android.graphics.Typeface
 import androidx.compose.foundation.background
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.border
+import androidx.compose.foundation.gestures.awaitEachGesture
+import androidx.compose.foundation.gestures.awaitFirstDown
+import androidx.compose.foundation.gestures.calculateCentroid
+import androidx.compose.foundation.gestures.calculateZoom
 import androidx.compose.foundation.gestures.detectDragGestures
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.*
@@ -20,6 +24,8 @@ import androidx.compose.material.icons.filled.GridOff
 import androidx.compose.material.icons.filled.GridOn
 import androidx.compose.material.icons.filled.Lock
 import androidx.compose.material.icons.filled.LockOpen
+import androidx.compose.material.icons.filled.ZoomIn
+import androidx.compose.material.icons.filled.ZoomOut
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -27,12 +33,18 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.TransformOrigin
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.nativeCanvas
 import androidx.compose.ui.graphics.toArgb
+import androidx.compose.ui.input.pointer.PointerEventPass
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.unit.IntOffset
+import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.widgetwesizer.app.data.model.GridSelection
@@ -56,6 +68,50 @@ fun BoardScreen(
     val snackbarHostState = remember { SnackbarHostState() }
     var showGrid by remember { mutableStateOf(false) }
     var snapToGrid by remember { mutableStateOf(false) }
+    val boardMessage by viewModel.boardMessage.collectAsState()
+
+    // Zoom: the board is laid out at full size and scaled with a graphics layer, so widget
+    // positions/sizes stay in board dp and touch input is mapped back automatically.
+    var zoom by rememberSaveable { mutableStateOf(1f) }
+    val hScroll = rememberScrollState()
+    val vScroll = rememberScrollState()
+    // Scroll target to apply after the next layout, so zooming keeps the focus point in place.
+    var pendingScroll by remember { mutableStateOf<Pair<Int, Int>?>(null) }
+
+    fun zoomTo(newZoom: Float, focusX: Float, focusY: Float) {
+        val z = newZoom.coerceIn(MIN_ZOOM, MAX_ZOOM)
+        if (z == zoom) return
+        val ratio = z / zoom
+        // During a pinch, scroll targets may not be applied yet; build on the latest one.
+        val baseX = pendingScroll?.first ?: hScroll.value
+        val baseY = pendingScroll?.second ?: vScroll.value
+        val targetX = ((baseX + focusX) * ratio - focusX).roundToInt()
+        val targetY = ((baseY + focusY) * ratio - focusY).roundToInt()
+        zoom = z
+        pendingScroll = targetX to targetY
+    }
+
+    LaunchedEffect(pendingScroll) {
+        val target = pendingScroll ?: return@LaunchedEffect
+        withFrameNanos { }  // wait for the resized board to be laid out
+        hScroll.scrollTo(target.first.coerceIn(0, hScroll.maxValue))
+        vScroll.scrollTo(target.second.coerceIn(0, vScroll.maxValue))
+        pendingScroll = null
+    }
+
+    LaunchedEffect(boardMessage) {
+        val msg = boardMessage ?: return@LaunchedEffect
+        val result = snackbarHostState.showSnackbar(
+            message = msg.text,
+            actionLabel = if (msg.removeWidgetId != null) "Remove" else null,
+            withDismissAction = msg.removeWidgetId == null,
+            duration = SnackbarDuration.Long
+        )
+        if (result == SnackbarResult.ActionPerformed && msg.removeWidgetId != null) {
+            viewModel.removeWidget(msg.removeWidgetId)
+        }
+        viewModel.clearBoardMessage()
+    }
 
     LaunchedEffect(Unit) {
         viewModel.cleanupRemovedProviders(context)
@@ -105,14 +161,32 @@ fun BoardScreen(
             )
         }
     ) { padding ->
+        var viewportSize by remember { mutableStateOf(IntSize.Zero) }
         Box(
             modifier = Modifier
                 .fillMaxSize()
                 .padding(padding)
-                .horizontalScroll(rememberScrollState())
-                .verticalScroll(rememberScrollState())
+                .onSizeChanged { viewportSize = it }
+                .pinchToZoom { factor, focus -> zoomTo(zoom * factor, focus.x, focus.y) }
         ) {
-            Box(modifier = Modifier.size(BOARD_SIZE_DP.dp)) {
+        Box(
+            modifier = Modifier
+                .fillMaxSize()
+                .horizontalScroll(hScroll)
+                .verticalScroll(vScroll)
+        ) {
+            // Outer box takes the zoomed size so scrolling covers the whole board.
+            Box(modifier = Modifier.size((BOARD_SIZE_DP * zoom).dp)) {
+            Box(
+                modifier = Modifier
+                    .wrapContentSize(Alignment.TopStart, unbounded = true)
+                    .requiredSize(BOARD_SIZE_DP.dp)
+                    .graphicsLayer {
+                        scaleX = zoom
+                        scaleY = zoom
+                        transformOrigin = TransformOrigin(0f, 0f)
+                    }
+            ) {
                 if (showGrid) {
                     GridOverlay(modifier = Modifier.fillMaxSize())
                 }
@@ -144,6 +218,75 @@ fun BoardScreen(
                         }
                     }
                 }
+            }
+            }
+        }
+
+            ZoomControls(
+                zoom = zoom,
+                onZoomIn = { zoomTo(zoom * ZOOM_STEP, viewportSize.width / 2f, viewportSize.height / 2f) },
+                onZoomOut = { zoomTo(zoom / ZOOM_STEP, viewportSize.width / 2f, viewportSize.height / 2f) },
+                onReset = { zoomTo(1f, viewportSize.width / 2f, viewportSize.height / 2f) },
+                modifier = Modifier
+                    .align(Alignment.BottomEnd)
+                    .padding(16.dp)
+            )
+        }
+    }
+}
+
+private const val MIN_ZOOM = 0.25f
+private const val MAX_ZOOM = 2.5f
+private const val ZOOM_STEP = 1.25f
+
+/**
+ * Two-finger pinch zoom that leaves one-finger touches alone, so scrolling, dragging
+ * and long-press on widgets keep working.
+ */
+private fun Modifier.pinchToZoom(onZoom: (factor: Float, focus: Offset) -> Unit): Modifier =
+    pointerInput(Unit) {
+        awaitEachGesture {
+            awaitFirstDown(requireUnconsumed = false, pass = PointerEventPass.Initial)
+            do {
+                val event = awaitPointerEvent(PointerEventPass.Initial)
+                if (event.changes.count { it.pressed } >= 2) {
+                    val factor = event.calculateZoom()
+                    if (factor != 1f) onZoom(factor, event.calculateCentroid(useCurrent = true))
+                    // Two fingers belong to the zoom gesture; keep them from scrolling/dragging.
+                    event.changes.forEach { it.consume() }
+                }
+            } while (event.changes.any { it.pressed })
+        }
+    }
+
+@Composable
+private fun ZoomControls(
+    zoom: Float,
+    onZoomIn: () -> Unit,
+    onZoomOut: () -> Unit,
+    onReset: () -> Unit,
+    modifier: Modifier = Modifier
+) {
+    Surface(
+        modifier = modifier,
+        shape = RoundedCornerShape(24.dp),
+        color = MaterialTheme.colorScheme.surface.copy(alpha = 0.92f),
+        tonalElevation = 3.dp,
+        shadowElevation = 3.dp
+    ) {
+        Column(horizontalAlignment = Alignment.CenterHorizontally) {
+            IconButton(onClick = onZoomIn, enabled = zoom < MAX_ZOOM) {
+                Icon(Icons.Filled.ZoomIn, contentDescription = "Zoom in")
+            }
+            TextButton(
+                onClick = onReset,
+                contentPadding = PaddingValues(horizontal = 4.dp, vertical = 0.dp),
+                modifier = Modifier.heightIn(min = 32.dp)
+            ) {
+                Text("${(zoom * 100).roundToInt()}%", style = MaterialTheme.typography.labelSmall)
+            }
+            IconButton(onClick = onZoomOut, enabled = zoom > MIN_ZOOM) {
+                Icon(Icons.Filled.ZoomOut, contentDescription = "Zoom out")
             }
         }
     }
@@ -246,7 +389,7 @@ private fun GridSelectionOverlay(
                     .height(h.dp)
                     .background(selColor.copy(alpha = 0.08f))
                     .border(2.dp, selColor.copy(alpha = 0.65f), RoundedCornerShape(4.dp))
-                    .pointerInput(Unit) {
+                    .pointerInput(selection) {
                         detectDragGestures(
                             onDragEnd = {
                                 bx = snapCell(bx)
@@ -326,6 +469,8 @@ private fun SelectionResizeHandles(
     val w = cols * CELL_DP
     val h = rows * CELL_DP
     val handleSize = 20.dp
+    val latestOnResize by rememberUpdatedState(onResize)
+    val latestOnResizeEnd by rememberUpdatedState(onResizeEnd)
     val half = with(density) { handleSize.toPx() / 2 }
 
     data class Handle(val xF: Float, val yF: Float, val dcSign: Int, val drSign: Int, val moveX: Boolean, val moveY: Boolean)
@@ -348,10 +493,11 @@ private fun SelectionResizeHandles(
                 .size(handleSize)
                 .clip(CircleShape)
                 .background(color.copy(alpha = 0.85f))
-                .pointerInput(cols, rows) {
+                // Constant key: restarting on every size change would drop the drag mid-gesture.
+                .pointerInput(handle) {
                     detectDragGestures(
                         onDragStart = { accumulated = 0f; accumulatedY = 0f },
-                        onDragEnd = { accumulated = 0f; accumulatedY = 0f; onResizeEnd() }
+                        onDragEnd = { accumulated = 0f; accumulatedY = 0f; latestOnResizeEnd() }
                     ) { change, drag ->
                         change.consume()
                         val dpX = with(density) { drag.x.toDp().value }
@@ -366,12 +512,12 @@ private fun SelectionResizeHandles(
                         if (dc != 0) {
                             accumulated -= dc * CELL_DP
                             val moveXDp = if (handle.moveX) -(dc * CELL_DP) else 0f
-                            onResize(dc, 0, moveXDp, 0f)
+                            latestOnResize(dc, 0, moveXDp, 0f)
                         }
                         if (dr != 0) {
                             accumulatedY -= dr * CELL_DP
                             val moveYDp = if (handle.moveY) -(dr * CELL_DP) else 0f
-                            onResize(0, dr, 0f, moveYDp)
+                            latestOnResize(0, dr, 0f, moveYDp)
                         }
                     }
                 }

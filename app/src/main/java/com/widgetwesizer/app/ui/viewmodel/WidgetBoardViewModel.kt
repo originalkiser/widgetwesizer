@@ -33,6 +33,20 @@ class WidgetBoardViewModel(
     val gridSelections: StateFlow<List<GridSelection>> = repository.getGridSelections()
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
 
+    /** One-off message for the board screen, optionally offering to remove a widget. */
+    data class BoardMessage(val text: String, val removeWidgetId: Int? = null)
+
+    private val _boardMessage = MutableStateFlow<BoardMessage?>(null)
+    val boardMessage: StateFlow<BoardMessage?> = _boardMessage
+
+    fun postBoardMessage(message: BoardMessage) {
+        _boardMessage.value = message
+    }
+
+    fun clearBoardMessage() {
+        _boardMessage.value = null
+    }
+
     private val _removedWidgetNames = MutableStateFlow<List<String>>(emptyList())
     val removedWidgetNames: StateFlow<List<String>> = _removedWidgetNames
 

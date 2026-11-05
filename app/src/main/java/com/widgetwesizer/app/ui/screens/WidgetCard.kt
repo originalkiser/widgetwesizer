@@ -10,6 +10,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Done
+import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -143,6 +144,17 @@ fun WidgetCard(
                     }
                 }
                 Spacer(Modifier.width(4.dp))
+                // Re-open the widget's own setup screen (e.g. Google Home favorites vs custom)
+                if (providerInfo?.configure != null) {
+                    IconButton(
+                        onClick = {
+                            widgetManager.launchConfigureActivity(entry.appWidgetId, providerInfo) { }
+                        },
+                        modifier = Modifier.size(32.dp)
+                    ) {
+                        Icon(Icons.Filled.Settings, contentDescription = "Widget settings", modifier = Modifier.size(18.dp))
+                    }
+                }
                 IconButton(
                     onClick = { showDeleteConfirm = true },
                     modifier = Modifier.size(32.dp)
@@ -209,18 +221,26 @@ fun WidgetCard(
                                     detectTapGestures(onLongPress = { isEditMode = true })
                                 }
                                 launch {
+                                    // Track the raw finger movement since the drag began and snap
+                                    // that, so small moves add up instead of being rounded away.
+                                    var startX = 0f
+                                    var startY = 0f
+                                    var totalX = 0f
+                                    var totalY = 0f
                                     detectDragGestures(
+                                        onDragStart = {
+                                            startX = offsetX; startY = offsetY
+                                            totalX = 0f; totalY = 0f
+                                        },
                                         onDragEnd = {
                                             onUpdateBounds(entry.appWidgetId, width, height, offsetX, offsetY)
                                         }
                                     ) { change, dragAmount ->
                                         change.consume()
-                                        offsetX = snap(
-                                            offsetX + with(density) { dragAmount.x.toDp().value }
-                                        ).coerceAtLeast(0f)
-                                        offsetY = snap(
-                                            offsetY + with(density) { dragAmount.y.toDp().value }
-                                        ).coerceAtLeast(0f)
+                                        totalX += with(density) { dragAmount.x.toDp().value }
+                                        totalY += with(density) { dragAmount.y.toDp().value }
+                                        offsetX = snap(startX + totalX).coerceAtLeast(0f)
+                                        offsetY = snap(startY + totalY).coerceAtLeast(0f)
                                     }
                                 }
                             }
@@ -237,11 +257,17 @@ fun WidgetCard(
                 width = width,
                 height = height,
                 density = density,
-                onResize = { dw, dh, dx, dy ->
-                    width = snapWidth(width + dw)
-                    height = snapHeight(height + dh)
-                    if (dx != 0f) offsetX = snap((offsetX + dx).coerceAtLeast(0f))
-                    if (dy != 0f) offsetY = snap((offsetY + dy).coerceAtLeast(0f))
+                currentBounds = { Bounds(offsetX, offsetY, width, height) },
+                onResize = { start, handle, totalX, totalY ->
+                    // Right/bottom edges stay put when dragging left/top handles.
+                    val right = start.x + start.w
+                    val bottom = start.y + start.h
+                    val newW = snapWidth(start.w + totalX * handle.dw)
+                    val newH = snapHeight(start.h + totalY * handle.dh)
+                    width = newW
+                    height = newH
+                    if (handle.dx != 0f) offsetX = snap(right - newW).coerceAtLeast(0f)
+                    if (handle.dy != 0f) offsetY = snap(bottom - newH).coerceAtLeast(0f)
                 },
                 onResizeEnd = {
                     onUpdateBounds(entry.appWidgetId, width, height, offsetX, offsetY)
@@ -251,48 +277,75 @@ fun WidgetCard(
     }
 }
 
+internal data class Bounds(val x: Float, val y: Float, val w: Float, val h: Float)
+
+/** Which edges a handle moves: dw/dh grow direction, dx/dy = 1 if it moves the left/top edge. */
+internal data class Handle(val xF: Float, val yF: Float, val dw: Float, val dh: Float, val dx: Float, val dy: Float)
+
+private val RESIZE_HANDLES = listOf(
+    Handle(0f,   0f,   -1f, -1f, 1f, 1f),  // NW
+    Handle(0.5f, 0f,    0f, -1f, 0f, 1f),  // N
+    Handle(1f,   0f,    1f, -1f, 0f, 1f),  // NE
+    Handle(1f,   0.5f,  1f,  0f, 0f, 0f),  // E
+    Handle(1f,   1f,    1f,  1f, 0f, 0f),  // SE
+    Handle(0.5f, 1f,    0f,  1f, 0f, 0f),  // S
+    Handle(0f,   1f,   -1f,  1f, 1f, 0f),  // SW
+    Handle(0f,   0.5f, -1f,  0f, 1f, 0f),  // W
+)
+
 @Composable
 private fun ResizeHandles(
     width: Float,
     height: Float,
     density: androidx.compose.ui.unit.Density,
-    onResize: (dw: Float, dh: Float, dx: Float, dy: Float) -> Unit,
+    currentBounds: () -> Bounds,
+    onResize: (start: Bounds, handle: Handle, totalXDp: Float, totalYDp: Float) -> Unit,
     onResizeEnd: () -> Unit
 ) {
-    val handleSize = 24.dp
-    val halfHandle = with(density) { handleSize.toPx() / 2 }
+    val touchSize = 36.dp   // generous touch target
+    val dotSize = 18.dp     // visible dot
+    val halfTouch = with(density) { touchSize.toPx() / 2 }
 
-    data class Handle(val xF: Float, val yF: Float, val dw: Float, val dh: Float, val dx: Float, val dy: Float)
+    // Keep the gesture running for the whole drag: the pointerInput key must not change
+    // while resizing, so read the latest callbacks through updated state.
+    val latestBounds by rememberUpdatedState(currentBounds)
+    val latestOnResize by rememberUpdatedState(onResize)
+    val latestOnResizeEnd by rememberUpdatedState(onResizeEnd)
 
-    val handles = listOf(
-        Handle(0f,   0f,   -1f, -1f, 1f, 1f),  // NW
-        Handle(0.5f, 0f,    0f, -1f, 0f, 1f),  // N
-        Handle(1f,   0f,    1f, -1f, 0f, 1f),  // NE
-        Handle(1f,   0.5f,  1f,  0f, 0f, 0f),  // E
-        Handle(1f,   1f,    1f,  1f, 0f, 0f),  // SE
-        Handle(0.5f, 1f,    0f,  1f, 0f, 0f),  // S
-        Handle(0f,   1f,   -1f,  1f, 1f, 0f),  // SW
-        Handle(0f,   0.5f, -1f,  0f, 1f, 0f),  // W
-    )
-
-    handles.forEach { handle ->
-        val xOff = with(density) { (width * handle.xF).dp.roundToPx() - halfHandle.roundToInt() }
-        val yOff = with(density) { (height * handle.yF).dp.roundToPx() - halfHandle.roundToInt() }
+    RESIZE_HANDLES.forEach { handle ->
+        val xOff = with(density) { (width * handle.xF).dp.roundToPx() - halfTouch.roundToInt() }
+        val yOff = with(density) { (height * handle.yF).dp.roundToPx() - halfTouch.roundToInt() }
 
         Box(
             modifier = Modifier
                 .offset { IntOffset(xOff, yOff) }
-                .size(handleSize)
-                .clip(CircleShape)
-                .background(MaterialTheme.colorScheme.primary.copy(alpha = 0.85f))
-                .pointerInput(width, height) {
-                    detectDragGestures(onDragEnd = onResizeEnd) { change, dragAmount ->
+                .size(touchSize)
+                .pointerInput(handle) {
+                    var start = Bounds(0f, 0f, 0f, 0f)
+                    var totalX = 0f
+                    var totalY = 0f
+                    detectDragGestures(
+                        onDragStart = {
+                            start = latestBounds()
+                            totalX = 0f; totalY = 0f
+                        },
+                        onDragEnd = { latestOnResizeEnd() },
+                        onDragCancel = { latestOnResizeEnd() }
+                    ) { change, dragAmount ->
                         change.consume()
-                        val dpX = with(density) { dragAmount.x.toDp().value }
-                        val dpY = with(density) { dragAmount.y.toDp().value }
-                        onResize(dpX * handle.dw, dpY * handle.dh, dpX * handle.dx, dpY * handle.dy)
+                        totalX += dragAmount.x.toDp().value
+                        totalY += dragAmount.y.toDp().value
+                        latestOnResize(start, handle, totalX, totalY)
                     }
-                }
-        )
+                },
+            contentAlignment = Alignment.Center
+        ) {
+            Box(
+                modifier = Modifier
+                    .size(dotSize)
+                    .clip(CircleShape)
+                    .background(MaterialTheme.colorScheme.primary.copy(alpha = 0.9f))
+            )
+        }
     }
 }
