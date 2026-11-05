@@ -7,9 +7,15 @@ on:
     branches: [ master, main ]
   workflow_dispatch:
 
+permissions:
+  contents: write
+
 jobs:
   build:
     runs-on: ubuntu-latest
+    env:
+      VERSION_CODE: ${{ github.run_number }}
+      VERSION_NAME: 1.0.${{ github.run_number }}
 
     steps:
       - name: Checkout
@@ -47,9 +53,29 @@ jobs:
           SIGNING_KEY_ALIAS: ${{ secrets.SIGNING_KEY_ALIAS }}
           SIGNING_KEY_PASSWORD: ${{ secrets.SIGNING_KEY_PASSWORD }}
 
+      - name: Rename APK
+        run: cp app/build/outputs/apk/release/app-release.apk WidgetWesizer.apk
+
       - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
-          name: widgetwesizer-v${{ github.run_number }}
-          path: app/build/outputs/apk/release/app-release.apk
+          name: widgetwesizer-v${{ env.VERSION_NAME }}
+          path: WidgetWesizer.apk
           retention-days: 90
+
+      # Publish a GitHub Release on pushes to master/main so the APK can be
+      # downloaded from a phone without signing in to GitHub.
+      - name: Publish release
+        if: github.event_name == 'push' || github.event_name == 'workflow_dispatch'
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: v${{ env.VERSION_NAME }}
+          name: WidgetWesizer v${{ env.VERSION_NAME }}
+          target_commitish: ${{ github.sha }}
+          make_latest: true
+          files: WidgetWesizer.apk
+          body: |
+            Download **WidgetWesizer.apk** below and open it on your Android device to install.
+            You may need to allow installs from unknown sources for your browser or file manager.
+
+            Built from ${{ github.sha }}.

@@ -13,8 +13,9 @@ android {
         applicationId = "com.widgetwesizer.app"
         minSdk = 26
         targetSdk = 35
-        versionCode = 1
-        versionName = "1.0"
+        // CI sets these so each published APK installs as an update over the last one.
+        versionCode = System.getenv("VERSION_CODE")?.toIntOrNull() ?: 1
+        versionName = System.getenv("VERSION_NAME") ?: "1.0"
     }
 
     signingConfigs {
