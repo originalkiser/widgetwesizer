@@ -26,17 +26,10 @@ class WidgetWezizerAppWidgetProvider : AppWidgetProvider() {
 
                 for (appWidgetId in appWidgetIds) {
                     val selectionId = configs.find { it.appWidgetId == appWidgetId }?.gridSelectionId ?: 1
-                    val bitmap = BoardSnapshot.load(context, selectionId)
-                    val views = if (bitmap != null) BoardSnapshot.snapshotViews(context, bitmap)
-                               else BoardSnapshot.placeholderViews(context)
-                    val pendingIntent = BoardSnapshot.resolveClickIntent(
-                        context, appWidgetId, selectionId, selections, entries
+                    appWidgetManager.updateAppWidget(
+                        appWidgetId,
+                        BoardSnapshot.buildViews(context, appWidgetId, selectionId, selections, entries)
                     )
-                    views.setOnClickPendingIntent(
-                        com.widgetwesizer.app.R.id.widget_root,
-                        pendingIntent
-                    )
-                    appWidgetManager.updateAppWidget(appWidgetId, views)
                 }
             } finally {
                 pendingResult.finish()

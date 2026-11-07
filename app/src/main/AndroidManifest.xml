@@ -31,6 +31,15 @@
             </intent-filter>
         </activity>
 
+        <!-- Invisible: forwards taps on the home screen widget to the real widget. -->
+        <activity
+            android:name=".widget.WidgetTapActivity"
+            android:exported="false"
+            android:excludeFromRecents="true"
+            android:noHistory="true"
+            android:taskAffinity=""
+            android:theme="@style/Theme.WidgetWesizer.Invisible" />
+
         <receiver
             android:name=".widget.WidgetWezizerAppWidgetProvider"
             android:exported="true">

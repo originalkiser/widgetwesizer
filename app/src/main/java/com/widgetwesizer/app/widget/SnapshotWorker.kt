@@ -120,8 +120,10 @@ class SnapshotWorker(
             )
         }
 
-        fun scheduleOneTime(context: Context) {
-            val request = OneTimeWorkRequestBuilder<SnapshotWorker>().build()
+        fun scheduleOneTime(context: Context, delaySeconds: Long = 0) {
+            val request = OneTimeWorkRequestBuilder<SnapshotWorker>()
+                .setInitialDelay(delaySeconds, TimeUnit.SECONDS)
+                .build()
             WorkManager.getInstance(context).enqueueUniqueWork(
                 WORK_NAME_ONCE, ExistingWorkPolicy.REPLACE, request
             )

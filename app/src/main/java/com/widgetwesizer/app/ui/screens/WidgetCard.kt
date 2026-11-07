@@ -26,6 +26,7 @@ import androidx.compose.ui.viewinterop.AndroidView
 import com.widgetwesizer.app.data.model.GridSelection
 import com.widgetwesizer.app.data.model.WidgetEntry
 import com.widgetwesizer.app.widget.WidgetManager
+import com.widgetwesizer.app.widget.WidgetTouch
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.launch
 import kotlin.math.roundToInt
@@ -53,6 +54,8 @@ fun WidgetCard(
     var height by remember(entry.appWidgetId) { mutableFloatStateOf(entry.heightDp) }
     var isEditMode by remember { mutableStateOf(false) }
     var showDeleteConfirm by remember { mutableStateOf(false) }
+    // The hosted widget view, so taps on the overlay can be passed through to it.
+    val hostViewRef = remember(entry.appWidgetId) { arrayOfNulls<android.view.View>(1) }
 
     val providerInfo = remember(entry.appWidgetId) {
         AppWidgetManager.getInstance(context).getAppWidgetInfo(entry.appWidgetId)
@@ -181,6 +184,7 @@ fun WidgetCard(
                 AndroidView(
                     factory = { ctx ->
                         widgetManager.createHostView(ctx, entry.appWidgetId, providerInfo)
+                            .also { hostViewRef[0] = it }
                     },
                     modifier = Modifier
                         .width(width.dp)
@@ -202,8 +206,9 @@ fun WidgetCard(
                 }
             }
 
-            // Overlay sits on top of AndroidView and captures all touches.
-            // Transparent in view mode (invisible but gesture-capturing);
+            // Overlay sits on top of AndroidView and captures all touches, so long-press and
+            // drag work; plain taps are forwarded to the widget.
+            // Transparent in view mode;
             // dark scrim in edit mode to show the widget is selected.
             Box(
                 modifier = Modifier
@@ -218,7 +223,13 @@ fun WidgetCard(
                             // long press is still seen by detectTapGestures.
                             coroutineScope {
                                 launch {
-                                    detectTapGestures(onLongPress = { isEditMode = true })
+                                    detectTapGestures(
+                                        onLongPress = { isEditMode = true },
+                                        // Pass plain taps through so the widget's buttons work.
+                                        onTap = { pos ->
+                                            hostViewRef[0]?.let { WidgetTouch.tap(it, pos.x, pos.y) }
+                                        }
+                                    )
                                 }
                                 launch {
                                     // Track the raw finger movement since the drag began and snap

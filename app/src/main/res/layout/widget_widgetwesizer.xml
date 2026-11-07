@@ -14,6 +14,15 @@
         android:scaleType="fitXY"
         android:visibility="gone" />
 
+    <!-- Invisible grid of tap zones over the snapshot. Each zone forwards the tap to the
+         real widget at that spot (see WidgetTapActivity). Filled in at runtime. -->
+    <LinearLayout
+        android:id="@+id/widget_hotspots"
+        android:layout_width="match_parent"
+        android:layout_height="match_parent"
+        android:orientation="vertical"
+        android:visibility="gone" />
+
     <!-- Placeholder shown before any snapshot exists -->
     <LinearLayout
         android:id="@+id/widget_placeholder"

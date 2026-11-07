@@ -21,6 +21,9 @@ object BoardSnapshot {
     // Cap the larger bitmap dimension to keep RemoteViews memory reasonable
     private const val MAX_DIM = 1080
 
+    // Upper bound on tap zones per home screen widget
+    private const val MAX_HOTSPOTS = 96
+
     private fun filename(selectionId: Int) = "board_snapshot_$selectionId.png"
 
     fun save(context: Context, bitmap: Bitmap, selectionId: Int) {
@@ -58,14 +61,61 @@ object BoardSnapshot {
 
         for (appWidgetId in ids) {
             val selectionId = configs.find { it.appWidgetId == appWidgetId }?.gridSelectionId ?: 1
-            val bitmap = load(context, selectionId)
+            awm.updateAppWidget(appWidgetId, buildViews(context, appWidgetId, selectionId, selections, entries))
+        }
+    }
+
+    /**
+     * Home screen widget for one grid selection: the board snapshot, covered by a grid of
+     * invisible tap zones that forward taps to the real widgets (see WidgetTapActivity).
+     * Before any snapshot exists, the whole widget just opens the app.
+     */
+    fun buildViews(
+        context: Context,
+        appWidgetId: Int,
+        selectionId: Int,
+        selections: List<GridSelection>,
+        entries: List<WidgetEntry>
+    ): RemoteViews {
+        val bitmap = load(context, selectionId)
+        val selection = selections.find { it.id == selectionId }
+        if (bitmap == null || selection == null) {
             val views = if (bitmap != null) snapshotViews(context, bitmap) else placeholderViews(context)
             views.setOnClickPendingIntent(
                 R.id.widget_root,
                 resolveClickIntent(context, appWidgetId, selectionId, selections, entries)
             )
-            awm.updateAppWidget(appWidgetId, views)
+            return views
         }
+
+        val views = snapshotViews(context, bitmap)
+        views.removeAllViews(R.id.widget_hotspots)
+        views.setViewVisibility(R.id.widget_hotspots, android.view.View.VISIBLE)
+
+        // Zones per board cell: finer for small selections, capped to keep the widget light.
+        val boardCells = selection.cols * selection.rows
+        val perCell = kotlin.math.sqrt(MAX_HOTSPOTS.toFloat() / boardCells).toInt().coerceIn(1, 4)
+        val cols = selection.cols * perCell
+        val rows = selection.rows * perCell
+
+        for (r in 0 until rows) {
+            val row = RemoteViews(context.packageName, R.layout.widget_hotspot_row)
+            for (c in 0 until cols) {
+                val cell = RemoteViews(context.packageName, R.layout.widget_hotspot_cell)
+                cell.setOnClickPendingIntent(
+                    R.id.hotspot_cell,
+                    WidgetTapActivity.pendingIntent(
+                        context, appWidgetId, selectionId,
+                        fx = (c + 0.5f) / cols, fy = (r + 0.5f) / rows,
+                        cellFw = 1f / cols, cellFh = 1f / rows,
+                        cellIndex = r * cols + c
+                    )
+                )
+                row.addView(R.id.hotspot_row, cell)
+            }
+            views.addView(R.id.widget_hotspots, row)
+        }
+        return views
     }
 
     fun snapshotViews(context: Context, bitmap: Bitmap): RemoteViews {
@@ -78,6 +128,7 @@ object BoardSnapshot {
 
     fun placeholderViews(context: Context): RemoteViews {
         val views = RemoteViews(context.packageName, R.layout.widget_widgetwesizer)
+        views.setViewVisibility(R.id.widget_hotspots, android.view.View.GONE)
         views.setInt(R.id.widget_snapshot, "setVisibility", android.view.View.GONE)
         views.setInt(R.id.widget_placeholder, "setVisibility", android.view.View.VISIBLE)
         return views
@@ -126,6 +177,13 @@ object BoardSnapshot {
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
         )
     }
+
+    /** Launch intent for the topmost board widget at the given board point (dp), if any. */
+    fun launchIntentAt(context: Context, entries: List<WidgetEntry>, xDp: Float, yDp: Float): Intent? =
+        entries.lastOrNull { e ->
+            xDp >= e.offsetXDp && xDp < e.offsetXDp + e.widthDp &&
+                yDp >= e.offsetYDp && yDp < e.offsetYDp + e.heightDp
+        }?.let { context.packageManager.getLaunchIntentForPackage(it.packageName) }
 
     private fun scaleSafe(src: Bitmap): Bitmap {
         // Scale uniformly so the larger dimension is at most MAX_DIM, preserving aspect ratio
